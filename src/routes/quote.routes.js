@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { authenticate } from '../middlewares/auth.middleware.js';
+import { createLeadQuote, listQuotes, revise, updateStatus } from '../controllers/quote.controller.js';
+const router = Router();
+router.use(authenticate);
+router.get('/', listQuotes);
+router.post('/lead/:leadId', createLeadQuote);
+router.post('/:id/revise', revise);
+router.patch('/:id/status', updateStatus);
+export default router;

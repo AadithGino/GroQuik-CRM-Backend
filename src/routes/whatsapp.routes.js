@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { authenticate } from '../middlewares/auth.middleware.js';
+import { generateLink, listTemplates, markSent, saveTemplate } from '../controllers/whatsapp.controller.js';
+const router = Router();
+router.use(authenticate);
+router.get('/templates', listTemplates);
+router.post('/templates', saveTemplate);
+router.post('/lead/:leadId/link', generateLink);
+router.post('/lead/:leadId/mark-sent', markSent);
+export default router;

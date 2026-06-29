@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { authenticate, requireRoles } from '../middlewares/auth.middleware.js';
+import { ROLES } from '../constants/crm.constants.js';
+import { bulkReassign, getAssignmentSettings, reassign, saveAssignmentSettings } from '../controllers/assignment.controller.js';
+const router = Router();
+router.use(authenticate, requireRoles(ROLES.ADMIN, ROLES.MANAGER));
+router.get('/settings', getAssignmentSettings);
+router.put('/settings', saveAssignmentSettings);
+router.patch('/leads/:id/reassign', reassign);
+router.patch('/leads/bulk-reassign', bulkReassign);
+export default router;

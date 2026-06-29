@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import multer from 'multer';
+import { authenticate, requireRoles } from '../middlewares/auth.middleware.js';
+import { ROLES } from '../constants/crm.constants.js';
+import { importExcel, listImportBatches } from '../controllers/import.controller.js';
+const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+router.use(authenticate, requireRoles(ROLES.ADMIN, ROLES.MANAGER));
+router.get('/batches', listImportBatches);
+router.post('/excel', upload.single('file'), importExcel);
+export default router;

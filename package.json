@@ -1,0 +1,35 @@
+{
+  "name": "internal-crm-backend",
+  "version": "1.0.0",
+  "description": "Internal CRM backend for lead SLA, follow-up, meeting reminders, and sales workflow automation.",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "seed:admin": "node src/utils/seedAdmin.js"
+  },
+  "dependencies": {
+    "bcryptjs": "latest",
+    "bullmq": "latest",
+    "compression": "latest",
+    "cookie-parser": "latest",
+    "cors": "latest",
+    "dayjs": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "express-rate-limit": "latest",
+    "helmet": "latest",
+    "ioredis": "latest",
+    "jsonwebtoken": "latest",
+    "mongoose": "latest",
+    "morgan": "latest",
+    "socket.io": "latest",
+    "zod": "latest",
+    "multer": "latest",
+    "xlsx": "latest"
+  },
+  "devDependencies": {
+    "nodemon": "latest"
+  }
+}
