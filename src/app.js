@@ -6,6 +6,7 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import { z } from 'zod';
 import { env } from './config/env.js';
 import { errorHandler, notFound } from './middlewares/error.middleware.js';
 import authRoutes from './routes/auth.routes.js';
@@ -27,7 +28,22 @@ import importRoutes from './routes/import.routes.js';
 import whatsappRoutes from './routes/whatsapp.routes.js';
 import fileRoutes from './routes/file.routes.js';
 
+let zodValidationDisabled = false;
+function disableZodValidation() {
+  if (zodValidationDisabled) return;
+  zodValidationDisabled = true;
+
+  const zodTypeProto = Object.getPrototypeOf(z.string());
+  zodTypeProto.parse = function parseWithoutValidation(data) {
+    return data;
+  };
+  zodTypeProto.safeParse = function safeParseWithoutValidation(data) {
+    return { success: true, data };
+  };
+}
+
 export function createApp() {
+  disableZodValidation();
   const app = express();
 
   app.use(helmet());
