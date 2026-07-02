@@ -15,8 +15,6 @@ import { createTask } from "./task.service.js";
 import { env } from "../config/env.js";
 import { sameDayEvening } from "../utils/time.js";
 
-const META_GRAPH_VERSION = "v21.0";
-
 function extractField(fieldData = [], names = []) {
   const item = fieldData.find((f) =>
     names.includes(String(f.name || "").toLowerCase()),
@@ -70,7 +68,7 @@ export async function fetchLeadgenFromGraph(leadgenId) {
     throw new Error("META_PAGE_ACCESS_TOKEN is not configured");
   }
 
-  const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${leadgenId}`);
+  const url = new URL(`https://graph.facebook.com/${env.META_GRAPH_API_VERSION}/${leadgenId}`);
   url.searchParams.set("access_token", token);
 
   const response = await fetch(url);

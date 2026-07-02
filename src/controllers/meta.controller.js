@@ -1,4 +1,5 @@
-import { env } from "../config/env.js";
+import { env, isConfigured } from "../config/env.js";
+import { pingRedis } from "../config/startupChecks.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import {
   createLeadFromMeta,
@@ -48,6 +49,28 @@ export const receiveWebhook = asyncHandler(async (req, res) => {
   }
 
   return res.status(200).json({ ok: true, results });
+});
+
+export const getIntegrationStatus = asyncHandler(async (req, res) => {
+  const baseUrl = (env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+  const redisConnected = await pingRedis();
+
+  res.json({
+    webhookUrl: `${baseUrl}/api/meta/webhook`,
+    redis: {
+      configured: Boolean(env.REDIS_URL || env.REDIS_HOST),
+      mode: env.REDIS_URL ? "url" : "host",
+      connected: redisConnected,
+    },
+    meta: {
+      verifyTokenConfigured: isConfigured(env.META_VERIFY_TOKEN),
+      pageAccessTokenConfigured: isConfigured(env.META_PAGE_ACCESS_TOKEN),
+      appSecretConfigured: isConfigured(env.META_APP_SECRET),
+      graphApiVersion: env.META_GRAPH_API_VERSION,
+      webhookSignatureEnforced: isConfigured(env.META_APP_SECRET),
+      readyForLiveLeads: isConfigured(env.META_PAGE_ACCESS_TOKEN),
+    },
+  });
 });
 
 export const testLead = asyncHandler(async (req, res) => {
