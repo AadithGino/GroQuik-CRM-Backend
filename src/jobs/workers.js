@@ -37,17 +37,43 @@ async function isSlaAlreadySatisfied({ leadId, slaType }) {
 }
 
 export function startWorkers() {
-  if (String(process.env.DISABLE_WORKERS || '').toLowerCase() === 'true') {
-    console.warn('BullMQ workers are disabled via DISABLE_WORKERS=true');
+  const workersEnabled = String(process.env.ENABLE_WORKERS || '').toLowerCase() === 'true';
+  if (!workersEnabled) {
+    console.warn('BullMQ workers are disabled (set ENABLE_WORKERS=true to enable).');
     return [];
   }
 
   const workers = [];
+  let disabledAfterInitError = false;
+  const scriptLoadErrorText = 'The "data" argument must be of type string or an instance of Buffer';
+  const shutdownWorkers = async (reason) => {
+    if (disabledAfterInitError) return;
+    disabledAfterInitError = true;
+    console.error(`Disabling BullMQ workers: ${reason}`);
+    await Promise.all(
+      workers.map(async (worker) => {
+        try {
+          await worker.close();
+        } catch {
+          // best-effort shutdown
+        }
+      })
+    );
+  };
+
   const startWorker = (queueName, processor) => {
     try {
       const worker = new Worker(queueName, processor, { connection: redisConnection });
       worker.on('error', (err) => {
-        console.error(`Worker error on ${queueName}:`, err.message || err);
+        const message = err?.message || String(err);
+        if (message.includes(scriptLoadErrorText)) {
+          console.error(`Worker init error on ${queueName}:`, message);
+          shutdownWorkers('BullMQ command script failed to load against current Redis setup. Set DISABLE_WORKERS=true to suppress workers explicitly.').catch(() => {});
+          return;
+        }
+        if (!disabledAfterInitError) {
+          console.error(`Worker error on ${queueName}:`, message);
+        }
       });
       workers.push(worker);
       return worker;
