@@ -44,14 +44,14 @@ export const listMockups = asyncHandler(async (req, res) => {
 });
 
 export const createLeadMockup = asyncHandler(async (req, res) => {
-  const body = mockupSchema.parse(req.body);
+  const body = req.body || {};
   await assertLeadAccess(req.user, req.params.leadId);
   const mockup = await createMockup({ leadId: req.params.leadId, userId: req.user._id, payload: body });
   res.status(201).json({ mockup });
 });
 
 export const update = asyncHandler(async (req, res) => {
-  const body = mockupSchema.partial().parse(req.body);
+  const body = req.body || {};
   await assertMockupAccess(req.user, req.params.id);
   const mockup = await updateMockup({ mockupId: req.params.id, userId: req.user._id, payload: body });
   res.json({ mockup });

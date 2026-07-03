@@ -58,7 +58,7 @@ const createMeetingSchema = z.object({
 });
 
 export const createLeadMeeting = asyncHandler(async (req, res) => {
-  const body = createMeetingSchema.parse(req.body);
+  const body = req.body || {};
   await assertLeadAccess(req.user, req.params.leadId);
   const meeting = await createMeeting({ leadId: req.params.leadId, userId: req.user._id, payload: body });
   res.status(201).json({ meeting });
@@ -90,26 +90,14 @@ export const listMeetings = asyncHandler(async (req, res) => {
 });
 
 export const reschedule = asyncHandler(async (req, res) => {
-  const body = z.object({ meetingAt: z.string().optional(), confirmTimeTaskDueAt: z.string().optional(), reason: z.string().optional(), note: z.string().optional(), location: z.string().optional() }).parse(req.body);
+  const body = req.body || {};
   await assertMeetingAccess(req.user, req.params.id);
   const meeting = await rescheduleMeeting({ meetingId: req.params.id, userId: req.user._id, payload: body });
   res.json({ meeting });
 });
 
 export const result = asyncHandler(async (req, res) => {
-  const body = z.object({
-    status: z.nativeEnum(MEETING_STATUS),
-    resultNote: z.string().optional(),
-    reason: z.string().optional(),
-    interestScore: z.number().min(1).max(10).optional(),
-    requirements: z.array(z.nativeEnum(REQUIREMENT)).optional(),
-    nextAction: z.nativeEnum(NEXT_ACTION).optional(),
-    nextFollowUpAt: z.string().optional(),
-    meetingAt: z.string().optional(),
-    location: z.string().optional(),
-    confirmTimeTaskDueAt: z.string().optional(),
-    actionDetails: actionDetailsSchema.optional(),
-  }).parse(req.body);
+  const body = req.body || {};
   await assertMeetingAccess(req.user, req.params.id);
   const meeting = await markMeetingResult({ meetingId: req.params.id, userId: req.user._id, payload: body });
   res.json({ meeting });

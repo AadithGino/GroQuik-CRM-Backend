@@ -36,7 +36,7 @@ async function issueTokenPair(user, req) {
 }
 
 export const login = asyncHandler(async (req, res) => {
-  const body = loginSchema.parse(req.body);
+  const body = req.body || {};
   const user = await User.findOne({ email: body.email }).select('+password');
   if (!user || !(await user.comparePassword(body.password))) throw new ApiError(401, 'Invalid email or password');
   if (!user.isActive) throw new ApiError(403, 'User is inactive');
@@ -46,7 +46,8 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 export const refresh = asyncHandler(async (req, res) => {
-  const { refreshToken } = refreshSchema.parse(req.body);
+  const refreshToken = req.body?.refreshToken;
+  if (!refreshToken) throw new ApiError(401, 'Refresh token required');
   let payload;
   try {
     payload = verifyRefreshToken(refreshToken);
@@ -77,12 +78,12 @@ export const refresh = asyncHandler(async (req, res) => {
 });
 
 export const logout = asyncHandler(async (req, res) => {
-  const parsed = refreshSchema.safeParse(req.body || {});
-  if (parsed.success) {
+  const refreshToken = req.body?.refreshToken;
+  if (refreshToken) {
     try {
-      const payload = verifyRefreshToken(parsed.data.refreshToken);
+      const payload = verifyRefreshToken(refreshToken);
       await RefreshToken.findOneAndUpdate(
-        { jti: payload.jti, tokenHash: hashToken(parsed.data.refreshToken), revokedAt: null },
+        { jti: payload.jti, tokenHash: hashToken(refreshToken), revokedAt: null },
         { revokedAt: new Date(), revokeReason: 'logout' }
       );
     } catch {

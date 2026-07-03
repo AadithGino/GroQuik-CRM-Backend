@@ -32,6 +32,6 @@ export const listPayments = asyncHandler(async (req, res) => {
 
 export const createLeadPayment = asyncHandler(async (req, res) => {
   await assertLeadAccess(req.user, req.params.leadId);
-  const result = await recordPayment({ leadId: req.params.leadId, userId: req.user._id, payload: paymentSchema.parse(req.body) });
+  const result = await recordPayment({ leadId: req.params.leadId, userId: req.user._id, payload: req.body || {} });
   res.status(201).json(result);
 });

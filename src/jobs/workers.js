@@ -37,7 +37,27 @@ async function isSlaAlreadySatisfied({ leadId, slaType }) {
 }
 
 export function startWorkers() {
-  new Worker(
+  if (String(process.env.DISABLE_WORKERS || '').toLowerCase() === 'true') {
+    console.warn('BullMQ workers are disabled via DISABLE_WORKERS=true');
+    return [];
+  }
+
+  const workers = [];
+  const startWorker = (queueName, processor) => {
+    try {
+      const worker = new Worker(queueName, processor, { connection: redisConnection });
+      worker.on('error', (err) => {
+        console.error(`Worker error on ${queueName}:`, err.message || err);
+      });
+      workers.push(worker);
+      return worker;
+    } catch (err) {
+      console.error(`Failed to start worker for ${queueName}:`, err.message || err);
+      return null;
+    }
+  };
+
+  startWorker(
     QUEUE_NAMES.TASK_REMINDERS,
     async (job) => {
       if (job.name === 'task-due-notification') return sendTaskDueNotification(job.data.taskId);
@@ -45,11 +65,10 @@ export function startWorkers() {
       // Backward compatibility for jobs queued by the previous broken version.
       if (job.name === 'task-due-check') return sendTaskDueNotification(job.data.taskId);
       return null;
-    },
-    { connection: redisConnection }
+    }
   );
 
-  new Worker(
+  startWorker(
     QUEUE_NAMES.SLA_CHECKS,
     async (job) => {
       const { taskId, leadId, slaType } = job.data;
@@ -87,19 +106,18 @@ export function startWorkers() {
         priority: 5,
       });
       return task;
-    },
-    { connection: redisConnection }
+    }
   );
 
-  new Worker(
+  startWorker(
     QUEUE_NAMES.MEETING_REMINDERS,
     async (job) => {
       if (job.name === 'meeting-reminder') return sendMeetingReminder(job.data.meetingId, job.data.reminderType, job.data.dueAt);
       if (job.name === 'meeting-status-check') return checkMeetingStatus(job.data.meetingId, job.data.dueAt);
       return null;
-    },
-    { connection: redisConnection }
+    }
   );
 
-  console.log('BullMQ workers started');
+  console.log(`BullMQ workers started: ${workers.length}/3`);
+  return workers;
 }

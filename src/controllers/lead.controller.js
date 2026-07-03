@@ -113,7 +113,7 @@ const callOutcomeSchema = z.object({
 });
 
 export const createLead = asyncHandler(async (req, res) => {
-  const body = createLeadSchema.parse(req.body);
+  const body = req.body || {};
   body.phone = normalizePhone(body.phone);
   body.callPhone = normalizePhone(body.callPhone) || body.phone;
   body.whatsappPhone = normalizePhone(body.whatsappPhone) || body.phone;
@@ -169,7 +169,7 @@ export const getLead = asyncHandler(async (req, res) => {
 
 
 export const updateLeadContacts = asyncHandler(async (req, res) => {
-  const body = updateLeadContactsSchema.parse(req.body);
+  const body = req.body || {};
   const lead = await assertLeadAccess(req.user, req.params.id);
 
   const nextPhone = normalizePhone(body.phone ?? lead.phone);
@@ -198,14 +198,15 @@ export const updateLeadContacts = asyncHandler(async (req, res) => {
 });
 
 export const addLeadNote = asyncHandler(async (req, res) => {
-  const note = z.object({ note: z.string().min(1) }).parse(req.body).note;
+  const note = String(req.body?.note || '').trim();
+  if (!note) throw new ApiError(400, 'Note is required');
   const lead = await assertLeadAccess(req.user, req.params.id);
   await addActivity({ leadId: lead._id, userId: req.user._id, type: ACTIVITY_TYPE.NOTE, title: 'Note added', description: note });
   res.json({ message: 'Note added' });
 });
 
 export const callOutcome = asyncHandler(async (req, res) => {
-  const body = callOutcomeSchema.parse(req.body);
+  const body = req.body || {};
   await assertLeadAccess(req.user, req.params.id);
   const lead = await applyCallOutcome({ leadId: req.params.id, userId: req.user._id, taskId: body.taskId, payload: body });
   if (!lead) throw new ApiError(404, 'Lead not found');

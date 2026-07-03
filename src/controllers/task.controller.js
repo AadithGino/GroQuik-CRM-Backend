@@ -63,7 +63,7 @@ export const listTasks = asyncHandler(async (req, res) => {
 });
 
 export const createManualTask = asyncHandler(async (req, res) => {
-  const body = createTaskSchema.parse(req.body);
+  const body = req.body || {};
   let assignedTo = body.assignedTo || req.user._id;
   if (body.leadId) {
     const lead = await assertLeadAccess(req.user, body.leadId);
@@ -126,14 +126,14 @@ async function completeBusinessTask(task, userId, body) {
 
 export const markDone = asyncHandler(async (req, res) => {
   const task = await assertTaskAccess(req.user, req.params.id);
-  const body = doneSchema.parse(req.body || {});
+  const body = req.body || {};
   const updated = await completeBusinessTask(task, req.user._id, body);
   res.json({ task: updated });
 });
 
 export const notDone = asyncHandler(async (req, res) => {
   await assertTaskAccess(req.user, req.params.id);
-  const body = z.object({ reason: z.string().optional(), rescheduleAt: z.string().optional() }).parse(req.body);
+  const body = req.body || {};
   const task = await markTaskNotDone({ taskId: req.params.id, userId: req.user._id, reason: body.reason, rescheduleAt: parseAppDateTime(body.rescheduleAt) });
   res.json({ task });
 });

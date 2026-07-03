@@ -30,7 +30,7 @@ export const listUsers = asyncHandler(async (req, res) => {
 });
 
 export const createUser = asyncHandler(async (req, res) => {
-  const body = createSchema.parse(req.body);
+  const body = req.body || {};
   const exists = await User.findOne({ email: body.email });
   if (exists) throw new ApiError(409, 'User email already exists');
   const user = await User.create(body);
@@ -38,7 +38,7 @@ export const createUser = asyncHandler(async (req, res) => {
 });
 
 export const updateUser = asyncHandler(async (req, res) => {
-  const body = updateSchema.parse(req.body);
+  const body = req.body || {};
   const user = await User.findById(req.params.id).select('+password');
   if (!user) throw new ApiError(404, 'User not found');
   Object.assign(user, body);

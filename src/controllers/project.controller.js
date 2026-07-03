@@ -36,12 +36,12 @@ export const listProjects = asyncHandler(async (req, res) => {
 
 export const convertLead = asyncHandler(async (req, res) => {
   await assertLeadAccess(req.user, req.params.leadId);
-  const project = await convertLeadToProject({ leadId: req.params.leadId, userId: req.user._id, payload: projectSchema.parse(req.body) });
+  const project = await convertLeadToProject({ leadId: req.params.leadId, userId: req.user._id, payload: req.body || {} });
   res.status(201).json({ project });
 });
 
 export const update = asyncHandler(async (req, res) => {
   await assertProjectAccess(req.user, req.params.id);
-  const project = await updateProject({ projectId: req.params.id, userId: req.user._id, payload: projectSchema.partial().parse(req.body) });
+  const project = await updateProject({ projectId: req.params.id, userId: req.user._id, payload: req.body || {} });
   res.json({ project });
 });

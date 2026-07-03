@@ -32,13 +32,13 @@ export const listTemplates = asyncHandler(async (req, res) => {
 });
 
 export const saveTemplate = asyncHandler(async (req, res) => {
-  const body = z.object({ name: z.string().min(2), category: z.string().optional(), body: z.string().min(1), isActive: z.boolean().optional() }).parse(req.body);
+  const body = req.body || {};
   const template = await WhatsAppTemplate.findOneAndUpdate({ name: body.name }, body, { new: true, upsert: true });
   res.status(201).json({ template });
 });
 
 export const generateLink = asyncHandler(async (req, res) => {
-  const body = z.object({ templateId: z.string().optional(), message: z.string().optional() }).parse(req.body);
+  const body = req.body || {};
   const lead = await assertLeadAccess(req.user, req.params.leadId);
   let message = body.message || '';
   if (body.templateId) {
@@ -53,7 +53,7 @@ export const generateLink = asyncHandler(async (req, res) => {
 });
 
 export const markSent = asyncHandler(async (req, res) => {
-  const body = z.object({ message: z.string().optional(), followUpAt: z.string().optional() }).parse(req.body);
+  const body = req.body || {};
   const lead = await assertLeadAccess(req.user, req.params.leadId);
   if (![LEAD_STATUS.WON, LEAD_STATUS.LOST, LEAD_STATUS.INVALID, LEAD_STATUS.PROJECT_CREATED].includes(lead.status)) {
     lead.status = LEAD_STATUS.WHATSAPP_SENT;

@@ -32,18 +32,18 @@ export const listQuotes = asyncHandler(async (req, res) => {
 
 export const createLeadQuote = asyncHandler(async (req, res) => {
   await assertLeadAccess(req.user, req.params.leadId);
-  const quote = await createQuote({ leadId: req.params.leadId, userId: req.user._id, payload: quoteSchema.parse(req.body) });
+  const quote = await createQuote({ leadId: req.params.leadId, userId: req.user._id, payload: req.body || {} });
   res.status(201).json({ quote });
 });
 
 export const revise = asyncHandler(async (req, res) => {
   await assertQuoteAccess(req.user, req.params.id);
-  const quote = await reviseQuote({ quoteId: req.params.id, userId: req.user._id, payload: quoteSchema.parse(req.body) });
+  const quote = await reviseQuote({ quoteId: req.params.id, userId: req.user._id, payload: req.body || {} });
   res.status(201).json({ quote });
 });
 
 export const updateStatus = asyncHandler(async (req, res) => {
-  const body = z.object({ status: z.nativeEnum(QUOTE_STATUS), note: z.string().optional(), fileUrl: z.union([z.string().url(), z.string().startsWith('/uploads/'), z.literal('')]).optional() }).parse(req.body);
+  const body = req.body || {};
   await assertQuoteAccess(req.user, req.params.id);
   const quote = await updateQuoteStatus({ quoteId: req.params.id, userId: req.user._id, status: body.status, note: body.note, fileUrl: body.fileUrl });
   res.json({ quote });

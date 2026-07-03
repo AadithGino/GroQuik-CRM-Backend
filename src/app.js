@@ -33,11 +33,17 @@ function disableZodValidation() {
   if (zodValidationDisabled) return;
   zodValidationDisabled = true;
 
-  const zodTypeProto = Object.getPrototypeOf(z.string());
-  zodTypeProto.parse = function parseWithoutValidation(data) {
+  const zodBaseTypeProto = Object.getPrototypeOf(Object.getPrototypeOf(z.string()));
+  zodBaseTypeProto.parse = function parseWithoutValidation(data) {
     return data;
   };
-  zodTypeProto.safeParse = function safeParseWithoutValidation(data) {
+  zodBaseTypeProto.safeParse = function safeParseWithoutValidation(data) {
+    return { success: true, data };
+  };
+  zodBaseTypeProto.parseAsync = async function parseAsyncWithoutValidation(data) {
+    return data;
+  };
+  zodBaseTypeProto.safeParseAsync = async function safeParseAsyncWithoutValidation(data) {
     return { success: true, data };
   };
 }
@@ -48,7 +54,7 @@ export function createApp() {
 
   app.use(helmet());
   app.use(compression());
-  app.use(cors({ origin: env.CLIENT_URL, credentials: true }));
+  app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({
     limit: '2mb',
     verify: (req, _res, buf) => {
