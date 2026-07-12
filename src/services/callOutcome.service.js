@@ -20,7 +20,7 @@ import { completeTask, createTask, markTaskNotDone } from './task.service.js';
 import { addBusinessDelay, daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveFollowUpDateTime, sameDayEvening } from '../utils/time.js';
 import { createMeeting } from './meeting.service.js';
 import { createMockup } from './mockup.service.js';
-import { createQuote } from './quote.service.js';
+import { createOrReviseQuoteFromAction } from './quote.service.js';
 import { assertNextActionPrerequisites, requirePaymentBeforeWon } from './businessRules.service.js';
 import { recomputeLeadNextAction } from './leadWorkflow.service.js';
 
@@ -129,7 +129,7 @@ async function createInlineNextAction({ lead, userId, payload, dueAt }) {
     const quotePayload = normalizeQuotePayload(actionDetails.quote, payload.note);
     if (quotePayload) {
       await lead.save();
-      await createQuote({ leadId: lead._id, userId, payload: quotePayload });
+      await createOrReviseQuoteFromAction({ leadId: lead._id, userId, nextAction: payload.nextAction, payload: quotePayload });
       return true;
     }
   }

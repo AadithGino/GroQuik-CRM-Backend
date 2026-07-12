@@ -64,7 +64,30 @@ export const markSent = asyncHandler(async (req, res) => {
     await completeTask({ taskId: pendingWhatsappTask._id, userId: req.user._id, customerAttempt: false, metadata: { whatsappSent: true } });
   }
   await addActivity({ leadId: lead._id, userId: req.user._id, type: ACTIVITY_TYPE.WHATSAPP_SENT, title: 'WhatsApp details sent', description: body.message });
-  const followUpAt = parseAppDateTime(body.followUpAt) || nextMorning();
-  const task = await createTask({ leadId: lead._id, assignedTo: lead.assignedTo, type: TASK_TYPE.FOLLOW_UP_CALL, title: 'Follow up after WhatsApp', description: 'WhatsApp sent. Call and confirm interest.', dueAt: followUpAt, priority: 4, metadata: { whatsappFollowUp: true, dedupeKey: `whatsapp-follow-up:${lead._id}:${Number(new Date(followUpAt))}` } });
-  res.json({ lead, task });
+  const requestedFollowUpAt = parseAppDateTime(body.followUpAt);
+  let task = await Task.findOne({
+    leadId: lead._id,
+    type: TASK_TYPE.FOLLOW_UP_CALL,
+    status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+  }).sort({ dueAt: 1 });
+
+  const reusedExistingFollowUp = Boolean(task);
+  if (task) {
+    if (requestedFollowUpAt) task.dueAt = requestedFollowUpAt;
+    task.metadata = { ...(task.metadata || {}), whatsappFollowUp: true, whatsappSentAt: new Date() };
+    await task.save();
+  } else {
+    const followUpAt = requestedFollowUpAt || nextMorning();
+    task = await createTask({
+      leadId: lead._id,
+      assignedTo: lead.assignedTo,
+      type: TASK_TYPE.FOLLOW_UP_CALL,
+      title: 'Follow up after WhatsApp',
+      description: 'WhatsApp sent. Call and confirm interest.',
+      dueAt: followUpAt,
+      priority: 4,
+      metadata: { whatsappFollowUp: true, dedupeKey: `whatsapp-follow-up:${lead._id}` },
+    });
+  }
+  res.json({ lead, task, reusedExistingFollowUp });
 });

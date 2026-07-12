@@ -2,7 +2,7 @@
 import { Quote } from '../models/quote.model.js';
 import { Lead } from '../models/lead.model.js';
 import { Task } from '../models/task.model.js';
-import { ACTIVITY_TYPE, LEAD_STATUS, NOTIFICATION_TYPE, QUOTE_STATUS, TASK_STATUS, TASK_TYPE } from '../constants/crm.constants.js';
+import { ACTIVITY_TYPE, LEAD_STATUS, NEXT_ACTION, NOTIFICATION_TYPE, QUOTE_STATUS, TASK_STATUS, TASK_TYPE } from '../constants/crm.constants.js';
 import { addActivity } from './activity.service.js';
 import { completeTask, completeOpenTasksByMetadata, createTask } from './task.service.js';
 import { notifyAssigneeAndAdmins } from './notification.service.js';
@@ -64,6 +64,15 @@ export async function createQuote({ leadId, userId, payload }) {
     metadata: { quoteId: quote._id, revisionNumber: quote.revisionNumber, dedupeKey: `send-quote:${quote._id}` },
   });
   return quote;
+}
+
+export async function createOrReviseQuoteFromAction({ leadId, userId, nextAction, payload }) {
+  if (nextAction === NEXT_ACTION.SEND_REVISED_QUOTE) {
+    const previous = await Quote.findOne({ leadId }).sort({ revisionNumber: -1, updatedAt: -1 });
+    if (!previous) throw new ApiError(400, 'Cannot create revised quote because no original quote exists yet. Create the first quote first.');
+    return reviseQuote({ quoteId: previous._id, userId, payload });
+  }
+  return createQuote({ leadId, userId, payload });
 }
 
 export async function reviseQuote({ quoteId, userId, payload }) {

@@ -8,7 +8,7 @@ import { createTask } from './task.service.js';
 import { cancelMeetingJobs, scheduleMeetingReminder, scheduleMeetingStatusCheck } from './scheduler.service.js';
 import { notifyAssigneeAndAdmins } from './notification.service.js';
 import { daysFromNowAtMorning, nextMorning, parseAppDateTime, sameDayEvening } from '../utils/time.js';
-import { createQuote } from './quote.service.js';
+import { createOrReviseQuoteFromAction } from './quote.service.js';
 import { createMockup } from './mockup.service.js';
 import { ApiError } from '../utils/apiError.js';
 import { assertNextActionPrerequisites, requirePaymentBeforeWon } from './businessRules.service.js';
@@ -164,7 +164,7 @@ async function createInlineMeetingNextAction({ lead, meeting, userId, payload, d
   if (quoteNextActions.has(payload.nextAction)) {
     const quotePayload = normalizeQuotePayload(actionDetails.quote, payload.resultNote);
     if (quotePayload) {
-      await createQuote({ leadId: lead._id, userId, payload: quotePayload });
+      await createOrReviseQuoteFromAction({ leadId: lead._id, userId, nextAction: payload.nextAction, payload: quotePayload });
       return true;
     }
   }
