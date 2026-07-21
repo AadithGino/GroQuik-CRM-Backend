@@ -59,6 +59,8 @@ export async function getLeadActionState(leadId) {
     latestQuoteGstMode: quote?.gstMode || 'INCLUDED',
     latestQuoteNote: quote?.note || '',
     latestQuoteRequirementSummary: quote?.requirementSummary || '',
+    hasSentQuote: Boolean(quote && [QUOTE_STATUS.SENT, QUOTE_STATUS.REVISED_SENT, QUOTE_STATUS.ACCEPTED].includes(quote.status)),
+    hasUnsentRevisionDraft: Boolean(quote && quote.revisionNumber > 1 && quote.status === QUOTE_STATUS.DRAFT),
     hasAcceptedQuote: Boolean(acceptedQuote),
     acceptedQuoteId: acceptedQuote?._id,
     hasReadyMockup: Boolean(readyMockup),
@@ -80,11 +82,25 @@ export async function assertNextActionPrerequisites({ leadId, nextAction }) {
   if (nextAction === NEXT_ACTION.SEND_REVISED_QUOTE && !state.hasQuote) {
     throw new ApiError(400, 'Cannot create revised quote because no original quote exists yet. Create the first quote first.');
   }
+  if (nextAction === NEXT_ACTION.SEND_REVISED_QUOTE && state.hasUnsentRevisionDraft) {
+    throw new ApiError(400, 'A revised quote draft is already pending. Send or update that revision before creating another one.');
+  }
   if (nextAction === NEXT_ACTION.CREATE_MOCKUP && state.hasActiveMockup) {
     throw new ApiError(400, `An active mockup already exists (${state.activeMockupStatus}). Update/revise that mockup instead of creating another one.`);
   }
   if (nextAction === NEXT_ACTION.SHARE_MOCKUP) await requireReadyMockup(leadId);
-  if (nextAction === NEXT_ACTION.COLLECT_ADVANCE) await requireAcceptedQuote(leadId, 'Cannot collect advance before a quote is accepted.');
+  if (nextAction === NEXT_ACTION.QUOTE_CONFIRMED) {
+    if (!state.hasQuote) throw new ApiError(400, 'Cannot confirm quote because no quote exists yet.');
+    if (state.hasAcceptedQuote) throw new ApiError(400, 'Quote is already confirmed/accepted.');
+  }
+  if (nextAction === NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE || nextAction === NEXT_ACTION.COLLECT_ADVANCE) {
+    await requireAcceptedQuote(leadId, 'Cannot follow up for advance before the quote is confirmed/accepted.');
+    if (state.hasAdvancePayment) throw new ApiError(400, 'Advance is already recorded for this lead.');
+  }
+  if (nextAction === NEXT_ACTION.ADVANCE_COLLECTED) {
+    await requireAcceptedQuote(leadId, 'Confirm/accept the quote before marking advance collected.');
+    if (state.hasAdvancePayment) throw new ApiError(400, 'Advance is already recorded. Open Payments to review it.');
+  }
   if (nextAction === NEXT_ACTION.PROJECT_HANDOFF) {
     if (state.hasProject) throw new ApiError(400, 'Project handoff already exists for this lead. Open the existing project instead.');
     await requireAcceptedQuote(leadId, 'Cannot create project handoff before a quote is accepted.');

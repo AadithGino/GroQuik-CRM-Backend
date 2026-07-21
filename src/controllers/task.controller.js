@@ -39,13 +39,14 @@ export const listTasks = asyncHandler(async (req, res) => {
   if (leadId) {
     await assertLeadAccess(req.user, leadId);
     filter.leadId = leadId;
+  } else {
+    await applyAssignedUserScope(filter, req.user, 'assignedTo');
   }
   if (type && type !== 'ALL') filter.type = type;
   if (status !== 'ALL') {
     if (status === 'OPEN') filter.status = { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] };
     else filter.status = status;
   }
-  await applyAssignedUserScope(filter, req.user, 'assignedTo');
   if (from || to) {
     filter.dueAt = {};
     if (from) filter.dueAt.$gte = parseAppRangeStart(from);

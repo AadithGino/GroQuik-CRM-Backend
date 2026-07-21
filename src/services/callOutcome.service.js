@@ -20,8 +20,8 @@ import { completeTask, createTask, markTaskNotDone } from './task.service.js';
 import { addBusinessDelay, daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveFollowUpDateTime, sameDayEvening } from '../utils/time.js';
 import { createMeeting } from './meeting.service.js';
 import { createMockup } from './mockup.service.js';
-import { createOrReviseQuoteFromAction } from './quote.service.js';
-import { assertNextActionPrerequisites, requirePaymentBeforeWon } from './businessRules.service.js';
+import { createOrReviseQuoteFromAction, updateQuoteStatus } from './quote.service.js';
+import { assertNextActionPrerequisites, latestQuote, requirePaymentBeforeWon } from './businessRules.service.js';
 import { recomputeLeadNextAction } from './leadWorkflow.service.js';
 
 function getRetryDueAt(attemptsBeforeThisResult, result) {
@@ -46,6 +46,7 @@ function actionToTaskType(nextAction) {
     [NEXT_ACTION.CREATE_MOCKUP]: TASK_TYPE.CREATE_MOCKUP,
     [NEXT_ACTION.SHARE_MOCKUP]: TASK_TYPE.SHARE_MOCKUP,
     [NEXT_ACTION.COLLECT_ADVANCE]: TASK_TYPE.COLLECT_ADVANCE,
+    [NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE]: TASK_TYPE.FOLLOW_UP_CALL,
     [NEXT_ACTION.PROJECT_HANDOFF]: TASK_TYPE.PROJECT_HANDOFF,
   };
   return map[nextAction] || TASK_TYPE.FOLLOW_UP_CALL;
@@ -62,8 +63,10 @@ function actionToTaskTitle(nextAction) {
     [NEXT_ACTION.SEND_REVISED_QUOTE]: 'Send revised quote',
     [NEXT_ACTION.CREATE_MOCKUP]: 'Create mockup',
     [NEXT_ACTION.SHARE_MOCKUP]: 'Share mockup',
-    [NEXT_ACTION.COLLECT_ADVANCE]: 'Collect advance',
+    [NEXT_ACTION.COLLECT_ADVANCE]: 'Follow up for advance',
+    [NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE]: 'Follow up for advance',
     [NEXT_ACTION.PROJECT_HANDOFF]: 'Create project handoff',
+    [NEXT_ACTION.QUOTE_CONFIRMED]: 'Quote confirmed — hand over to admin',
   };
   return map[nextAction] || 'Follow up';
 }
@@ -72,6 +75,42 @@ const meetingActions = new Set([NEXT_ACTION.SCHEDULE_DEMO, NEXT_ACTION.SCHEDULE_
 const quoteActions = new Set([NEXT_ACTION.SEND_QUOTE, NEXT_ACTION.SEND_REVISED_QUOTE]);
 const mockupActions = new Set([NEXT_ACTION.CREATE_MOCKUP]);
 const inlineObjectActions = new Set([...meetingActions, ...quoteActions, ...mockupActions]);
+const noScheduleNextActions = new Set([
+  NEXT_ACTION.MARK_LOST,
+  NEXT_ACTION.MARK_WON,
+  NEXT_ACTION.PROJECT_HANDOFF,
+  NEXT_ACTION.QUOTE_CONFIRMED,
+  NEXT_ACTION.ADVANCE_COLLECTED,
+]);
+
+async function handleQuoteConfirmed({ lead, userId, note }) {
+  const quote = await latestQuote(lead._id);
+  if (!quote) throw new ApiError(400, 'Cannot confirm quote because no quote exists yet.');
+  if (quote.status === QUOTE_STATUS.DRAFT) {
+    const sentStatus = quote.revisionNumber > 1 ? QUOTE_STATUS.REVISED_SENT : QUOTE_STATUS.SENT;
+    await updateQuoteStatus({ quoteId: quote._id, userId, status: sentStatus, note: note || 'Auto-marked sent while confirming quote' });
+  }
+  const latest = await latestQuote(lead._id);
+  if (latest?.status !== QUOTE_STATUS.ACCEPTED) {
+    await updateQuoteStatus({
+      quoteId: latest._id,
+      userId,
+      status: QUOTE_STATUS.ACCEPTED,
+      note: note || 'Quote confirmed on call — hand over to admin for advance/project',
+    });
+  }
+  lead.status = LEAD_STATUS.ADVANCE_PENDING;
+  await lead.save();
+  await recomputeLeadNextAction(lead._id);
+  return Lead.findById(lead._id);
+}
+
+async function handleAdvanceCollectedRedirect({ lead }) {
+  lead.status = LEAD_STATUS.ADVANCE_PENDING;
+  await lead.save();
+  await recomputeLeadNextAction(lead._id);
+  return Lead.findById(lead._id);
+}
 
 function linesToArray(value) {
   if (Array.isArray(value)) return value.filter(Boolean);
@@ -296,17 +335,42 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
       await recomputeLeadNextAction(lead._id);
       return lead;
     }
+    if (payload.nextAction === NEXT_ACTION.QUOTE_CONFIRMED) {
+      await lead.save();
+      return handleQuoteConfirmed({ lead, userId, note: payload.note });
+    }
+    if (payload.nextAction === NEXT_ACTION.ADVANCE_COLLECTED) {
+      await lead.save();
+      return handleAdvanceCollectedRedirect({ lead });
+    }
 
     const inlineActionCreated = inlineObjectActions.has(payload.nextAction) ? await createInlineNextAction({ lead, userId, payload, dueAt }) : false;
     if (inlineActionCreated) return Lead.findById(lead._id);
 
-    if (payload.nextAction && !dueAt) {
+    if (payload.nextAction && !dueAt && !noScheduleNextActions.has(payload.nextAction)) {
       throw new ApiError(400, 'Next follow-up date/time is required for the selected next action.');
     }
 
     if (dueAt && payload.nextAction) {
+      const quote = await latestQuote(lead._id);
       await lead.save();
-      await createTask({ leadId: lead._id, assignedTo: lead.assignedTo, type: actionToTaskType(payload.nextAction), title: actionToTaskTitle(payload.nextAction), description: payload.note, dueAt, priority: lead.interestScore >= 7 ? 5 : 3, metadata: { nextAction: payload.nextAction, dedupeKey: `call-next:${lead._id}:${payload.nextAction}:${Number(new Date(dueAt))}` } });
+      await createTask({
+        leadId: lead._id,
+        assignedTo: lead.assignedTo,
+        type: actionToTaskType(payload.nextAction),
+        title: actionToTaskTitle(payload.nextAction),
+        description: payload.note,
+        dueAt,
+        priority: lead.interestScore >= 7 ? 5 : 3,
+        metadata: {
+          nextAction: payload.nextAction,
+          quoteId: quote?._id,
+          finalAmount: quote?.finalAmount,
+          advanceFollowUp: payload.nextAction === NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE,
+          quoteConfirmationFollowUp: payload.nextAction === NEXT_ACTION.FOLLOW_UP_LATER && Boolean(quote),
+          dedupeKey: `call-next:${lead._id}:${payload.nextAction}:${Number(new Date(dueAt))}`,
+        },
+      });
     } else {
       await lead.save();
       await recomputeLeadNextAction(lead._id);

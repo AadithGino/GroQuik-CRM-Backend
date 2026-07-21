@@ -1,6 +1,6 @@
 
 import dayjs from 'dayjs';
-import { ACTIVITY_TYPE, LEAD_STATUS, MEETING_STATUS, MEETING_TYPE, NEXT_ACTION, NOTIFICATION_TYPE, TASK_TYPE } from '../constants/crm.constants.js';
+import { ACTIVITY_TYPE, LEAD_STATUS, MEETING_STATUS, MEETING_TYPE, NEXT_ACTION, NOTIFICATION_TYPE, QUOTE_STATUS, TASK_TYPE } from '../constants/crm.constants.js';
 import { Meeting } from '../models/meeting.model.js';
 import { Lead } from '../models/lead.model.js';
 import { addActivity } from './activity.service.js';
@@ -8,10 +8,10 @@ import { createTask } from './task.service.js';
 import { cancelMeetingJobs, scheduleMeetingReminder, scheduleMeetingStatusCheck } from './scheduler.service.js';
 import { notifyAssigneeAndAdmins } from './notification.service.js';
 import { daysFromNowAtMorning, nextMorning, parseAppDateTime, sameDayEvening } from '../utils/time.js';
-import { createOrReviseQuoteFromAction } from './quote.service.js';
+import { createOrReviseQuoteFromAction, updateQuoteStatus } from './quote.service.js';
 import { createMockup } from './mockup.service.js';
 import { ApiError } from '../utils/apiError.js';
-import { assertNextActionPrerequisites, requirePaymentBeforeWon } from './businessRules.service.js';
+import { assertNextActionPrerequisites, latestQuote, requirePaymentBeforeWon } from './businessRules.service.js';
 import { recomputeLeadNextAction } from './leadWorkflow.service.js';
 
 export const MEETING_RESULT_ACTION = Object.freeze({
@@ -32,6 +32,7 @@ function actionToTaskType(nextAction) {
     [NEXT_ACTION.SHARE_MOCKUP]: TASK_TYPE.SHARE_MOCKUP,
     [NEXT_ACTION.SCHEDULE_MOCKUP_MEETING]: TASK_TYPE.SCHEDULE_MOCKUP_MEETING,
     [NEXT_ACTION.COLLECT_ADVANCE]: TASK_TYPE.COLLECT_ADVANCE,
+    [NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE]: TASK_TYPE.FOLLOW_UP_CALL,
     [NEXT_ACTION.PROJECT_HANDOFF]: TASK_TYPE.PROJECT_HANDOFF,
     [NEXT_ACTION.SEND_WHATSAPP_DETAILS]: TASK_TYPE.SEND_WHATSAPP,
   };
@@ -49,8 +50,10 @@ function actionToTaskTitle(nextAction) {
     [NEXT_ACTION.SEND_REVISED_QUOTE]: 'Send revised quote',
     [NEXT_ACTION.CREATE_MOCKUP]: 'Create mockup',
     [NEXT_ACTION.SHARE_MOCKUP]: 'Share mockup',
-    [NEXT_ACTION.COLLECT_ADVANCE]: 'Collect advance',
+    [NEXT_ACTION.COLLECT_ADVANCE]: 'Follow up for advance',
+    [NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE]: 'Follow up for advance',
     [NEXT_ACTION.PROJECT_HANDOFF]: 'Create project handoff',
+    [NEXT_ACTION.QUOTE_CONFIRMED]: 'Quote confirmed — hand over to admin',
   };
   return map[nextAction] || 'Follow up after meeting';
 }
@@ -196,6 +199,39 @@ async function applyMeetingResultNextAction({ lead, meeting, userId, payload, du
     await lead.save();
     await recomputeLeadNextAction(lead._id);
     return false;
+  }
+
+  if (nextAction === NEXT_ACTION.QUOTE_CONFIRMED) {
+    const quote = await latestQuote(lead._id);
+    if (!quote) throw new ApiError(400, 'Cannot confirm quote because no quote exists yet.');
+    if (quote.status === QUOTE_STATUS.DRAFT) {
+      await updateQuoteStatus({
+        quoteId: quote._id,
+        userId,
+        status: quote.revisionNumber > 1 ? QUOTE_STATUS.REVISED_SENT : QUOTE_STATUS.SENT,
+        note: payload.resultNote || 'Auto-marked sent while confirming quote',
+      });
+    }
+    const latest = await latestQuote(lead._id);
+    if (latest?.status !== QUOTE_STATUS.ACCEPTED) {
+      await updateQuoteStatus({
+        quoteId: latest._id,
+        userId,
+        status: QUOTE_STATUS.ACCEPTED,
+        note: payload.resultNote || 'Quote confirmed after meeting — hand over to admin',
+      });
+    }
+    lead.status = LEAD_STATUS.ADVANCE_PENDING;
+    await lead.save();
+    await recomputeLeadNextAction(lead._id);
+    return true;
+  }
+
+  if (nextAction === NEXT_ACTION.ADVANCE_COLLECTED) {
+    lead.status = LEAD_STATUS.ADVANCE_PENDING;
+    await lead.save();
+    await recomputeLeadNextAction(lead._id);
+    return true;
   }
 
   if (inlineObjectActions.has(nextAction)) {

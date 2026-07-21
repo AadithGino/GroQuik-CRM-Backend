@@ -18,15 +18,25 @@ async function completeQuoteSendTask({ leadId, quoteId, userId, revised = false 
 }
 
 async function createQuoteFollowUp({ quote, lead, revised = false }) {
+  const amountLabel = `₹${Number(quote.finalAmount || 0).toLocaleString('en-IN')}`;
   return createTask({
     leadId: quote.leadId,
     assignedTo: lead.assignedTo,
     type: TASK_TYPE.FOLLOW_UP_CALL,
-    title: revised ? 'Follow up on revised quote' : 'Follow up on quote',
-    description: revised ? 'Revised quote sent. Follow up tomorrow morning.' : 'Quote sent. Follow up tomorrow morning.',
+    title: revised ? 'Follow up for revised quote confirmation' : 'Follow up for quote confirmation',
+    description: revised
+      ? `Revised quote (${amountLabel}) sent. Confirm acceptance, revise if needed, or move to advance.`
+      : `Quote (${amountLabel}) sent. Confirm acceptance, revise if needed, or move to advance.`,
     dueAt: nextMorning(),
     priority: 5,
-    metadata: { quoteId: quote._id, revisionNumber: quote.revisionNumber, quoteFollowUp: true, dedupeKey: `quote-follow-up:${quote._id}` },
+    metadata: {
+      quoteId: quote._id,
+      revisionNumber: quote.revisionNumber,
+      finalAmount: quote.finalAmount,
+      quoteFollowUp: true,
+      quoteConfirmationFollowUp: true,
+      dedupeKey: `quote-follow-up:${quote._id}`,
+    },
   });
 }
 
@@ -78,6 +88,14 @@ export async function createOrReviseQuoteFromAction({ leadId, userId, nextAction
 export async function reviseQuote({ quoteId, userId, payload }) {
   const previous = await Quote.findById(quoteId);
   if (!previous) return null;
+  const pendingRevision = await Quote.findOne({
+    leadId: previous.leadId,
+    revisionNumber: { $gt: previous.revisionNumber },
+    status: QUOTE_STATUS.DRAFT,
+  }).sort({ revisionNumber: -1 });
+  if (pendingRevision) {
+    throw new ApiError(400, 'A revised quote draft is already pending. Send that revision before creating another one.');
+  }
   await Quote.findByIdAndUpdate(previous._id, { status: QUOTE_STATUS.REVISION_REQUIRED });
   return createQuote({
     leadId: previous.leadId,
