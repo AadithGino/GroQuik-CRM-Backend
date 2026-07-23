@@ -12,6 +12,7 @@ import {
   NOT_DONE_REASON,
   QUOTE_STATUS,
   TASK_TYPE,
+  normalizeRequirements,
 } from '../constants/crm.constants.js';
 import { Lead } from '../models/lead.model.js';
 import { ApiError } from '../utils/apiError.js';
@@ -56,7 +57,7 @@ function actionToTaskTitle(nextAction) {
   const map = {
     [NEXT_ACTION.CALL_AGAIN]: 'Call customer again',
     [NEXT_ACTION.CALL_DECISION_MAKER]: 'Call decision maker',
-    [NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION]: 'Check customer decision',
+    [NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION]: 'Follow up for quote confirmation',
     [NEXT_ACTION.FOLLOW_UP_LATER]: 'Follow up later',
     [NEXT_ACTION.SEND_WHATSAPP_DETAILS]: 'Send WhatsApp details',
     [NEXT_ACTION.SEND_QUOTE]: 'Send quote',
@@ -150,7 +151,7 @@ function normalizeMeetingPayload({ nextAction, raw = {}, requirements = [], fall
     mode: raw.mode || MEETING_MODE.PHONE_CALL,
     meetingAt: raw.meetingAt || undefined,
     confirmTimeTaskDueAt: raw.confirmTimeTaskDueAt || dueAt,
-    topicRequirements: raw.topicRequirements || requirements || [],
+    topicRequirements: normalizeRequirements(raw.topicRequirements || requirements || []),
     note: raw.note || fallbackNote,
     location: raw.location,
     metadata: { createdFrom: 'CALL_OUTCOME_NEXT_ACTION', nextAction },
@@ -255,7 +256,7 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
 
     lead.status = LEAD_STATUS.CONTACTED;
     lead.interestScore = payload.interestScore ?? lead.interestScore;
-    lead.requirements = payload.requirements || lead.requirements;
+    lead.requirements = normalizeRequirements(payload.requirements || lead.requirements);
     lead.failedCustomerAttempts = 0;
     if (lead.interestScore >= 7) lead.tags = Array.from(new Set([...(lead.tags || []), LEAD_TAG.HIGH_INTENT]));
     if (lead.interestScore <= 3) lead.tags = Array.from(new Set([...(lead.tags || []), LEAD_TAG.LOW_INTENT]));
@@ -314,7 +315,7 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
   if ([CALL_RESULT.CONNECTED, CALL_RESULT.INTERESTED].includes(result)) {
     lead.status = LEAD_STATUS.CONTACTED;
     lead.interestScore = payload.interestScore ?? lead.interestScore;
-    lead.requirements = payload.requirements || lead.requirements;
+    lead.requirements = normalizeRequirements(payload.requirements || lead.requirements);
     lead.failedCustomerAttempts = 0;
     if (lead.interestScore >= 7) lead.tags = Array.from(new Set([...(lead.tags || []), LEAD_TAG.HIGH_INTENT]));
     if (lead.interestScore <= 3) lead.tags = Array.from(new Set([...(lead.tags || []), LEAD_TAG.LOW_INTENT]));
@@ -367,7 +368,7 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
           quoteId: quote?._id,
           finalAmount: quote?.finalAmount,
           advanceFollowUp: payload.nextAction === NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE,
-          quoteConfirmationFollowUp: payload.nextAction === NEXT_ACTION.FOLLOW_UP_LATER && Boolean(quote),
+          quoteConfirmationFollowUp: [NEXT_ACTION.FOLLOW_UP_LATER, NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION].includes(payload.nextAction) && Boolean(quote),
           dedupeKey: `call-next:${lead._id}:${payload.nextAction}:${Number(new Date(dueAt))}`,
         },
       });

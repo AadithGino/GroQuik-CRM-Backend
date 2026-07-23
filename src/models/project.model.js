@@ -20,7 +20,7 @@ const projectSchema = new mongoose.Schema(
     quoteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Quote' },
     clientName: { type: String },
     businessName: { type: String },
-    products: [{ type: String, enum: Object.values(REQUIREMENT) }],
+    products: [{ type: String }],
     deliverables: [{ type: String }],
     finalQuoteValue: { type: Number, default: 0 },
     paymentReceived: { type: Number, default: 0 },

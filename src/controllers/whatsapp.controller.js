@@ -64,6 +64,12 @@ export const markSent = asyncHandler(async (req, res) => {
     await completeTask({ taskId: pendingWhatsappTask._id, userId: req.user._id, customerAttempt: false, metadata: { whatsappSent: true } });
   }
   await addActivity({ leadId: lead._id, userId: req.user._id, type: ACTIVITY_TYPE.WHATSAPP_SENT, title: 'WhatsApp details sent', description: body.message });
+
+  const createFollowUp = body.createFollowUp === true || body.createFollowUp === 'true' || body.createFollowUp === 1;
+  if (!createFollowUp) {
+    return res.json({ lead, task: null, reusedExistingFollowUp: false });
+  }
+
   const requestedFollowUpAt = parseAppDateTime(body.followUpAt);
   let task = await Task.findOne({
     leadId: lead._id,

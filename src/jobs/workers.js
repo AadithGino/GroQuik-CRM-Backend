@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
-import { redisConnection } from '../config/redis.js';
-import { QUEUE_NAMES } from './queues.js';
+import { getBullmqConnectionOptions } from '../config/redis.js';
+import { QUEUE_NAMES, isBullmqDisabled } from './queues.js';
 import { markOverdueIfPending, sendTaskDueNotification } from '../services/task.service.js';
 import { Task } from '../models/task.model.js';
 import { TASK_STATUS, NOTIFICATION_TYPE, LEAD_STATUS, ACTIVITY_TYPE, TASK_TYPE } from '../constants/crm.constants.js';
@@ -9,6 +9,8 @@ import { Lead } from '../models/lead.model.js';
 import { addActivity } from '../services/activity.service.js';
 import { checkMeetingStatus, sendMeetingReminder } from '../services/meeting.service.js';
 import { Activity } from '../models/activity.model.js';
+
+const SCRIPT_LOAD_ERROR = 'The "data" argument must be of type string or an instance of Buffer';
 
 async function isSlaAlreadySatisfied({ leadId, slaType }) {
   const lead = await Lead.findById(leadId).select('status');
@@ -43,9 +45,14 @@ export function startWorkers() {
     return [];
   }
 
+  if (isBullmqDisabled()) {
+    console.warn('BullMQ workers skipped because queues already failed against Redis.');
+    return [];
+  }
+
   const workers = [];
   let disabledAfterInitError = false;
-  const scriptLoadErrorText = 'The "data" argument must be of type string or an instance of Buffer';
+
   const shutdownWorkers = async (reason) => {
     if (disabledAfterInitError) return;
     disabledAfterInitError = true;
@@ -63,18 +70,24 @@ export function startWorkers() {
 
   const startWorker = (queueName, processor) => {
     try {
-      const worker = new Worker(queueName, processor, { connection: redisConnection });
+      const worker = new Worker(queueName, processor, {
+        connection: getBullmqConnectionOptions(),
+        skipVersionCheck: true,
+      });
+
+      // Prevent unhandled RedisConnection 'error' from crashing Node.
       worker.on('error', (err) => {
         const message = err?.message || String(err);
-        if (message.includes(scriptLoadErrorText)) {
+        if (message.includes(SCRIPT_LOAD_ERROR) || message.includes('ERR_INVALID_ARG_TYPE')) {
           console.error(`Worker init error on ${queueName}:`, message);
-          shutdownWorkers('BullMQ command script failed to load against current Redis setup. Set DISABLE_WORKERS=true to suppress workers explicitly.').catch(() => {});
+          shutdownWorkers('BullMQ command script failed to load against current Redis setup. Leaving API running without workers.').catch(() => {});
           return;
         }
         if (!disabledAfterInitError) {
           console.error(`Worker error on ${queueName}:`, message);
         }
       });
+
       workers.push(worker);
       return worker;
     } catch (err) {
@@ -88,7 +101,6 @@ export function startWorkers() {
     async (job) => {
       if (job.name === 'task-due-notification') return sendTaskDueNotification(job.data.taskId);
       if (job.name === 'task-overdue-check') return markOverdueIfPending(job.data.taskId);
-      // Backward compatibility for jobs queued by the previous broken version.
       if (job.name === 'task-due-check') return sendTaskDueNotification(job.data.taskId);
       return null;
     }
@@ -144,6 +156,6 @@ export function startWorkers() {
     }
   );
 
-  console.log(`BullMQ workers started: ${workers.length}/3`);
+  console.log(`BullMQ workers started: ${workers.filter(Boolean).length}/3`);
   return workers;
 }

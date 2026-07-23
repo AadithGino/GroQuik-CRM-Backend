@@ -34,7 +34,7 @@ const leadSchema = new mongoose.Schema(
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     status: { type: String, enum: Object.values(LEAD_STATUS), default: LEAD_STATUS.NEW_LEAD, index: true },
     interestScore: { type: Number, min: 1, max: 10 },
-    requirements: [{ type: String, enum: Object.values(REQUIREMENT) }],
+    requirements: [{ type: String }],
     tags: [{ type: String, enum: Object.values(LEAD_TAG) }],
     failedCustomerAttempts: { type: Number, default: 0 },
     internalMissCount: { type: Number, default: 0 },

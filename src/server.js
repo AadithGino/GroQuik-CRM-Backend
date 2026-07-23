@@ -12,7 +12,23 @@ async function bootstrap() {
   const app = createApp();
   const server = http.createServer(app);
   initSocket(server);
-  startWorkers();
+
+  // BullMQ/Upstash script failures must never take down the HTTP API.
+  process.on('uncaughtException', (err) => {
+    const message = err?.message || String(err);
+    if (message.includes('The "data" argument must be of type string or an instance of Buffer') || err?.code === 'ERR_INVALID_ARG_TYPE') {
+      console.error('Suppressed BullMQ/Redis uncaught exception; API stays up:', message);
+      return;
+    }
+    console.error('Uncaught exception', err);
+    process.exit(1);
+  });
+
+  try {
+    startWorkers();
+  } catch (err) {
+    console.error('Worker startup failed (API continues):', err?.message || err);
+  }
 
   server.listen(env.PORT, () => {
     console.log(`CRM backend running on port ${env.PORT}`);

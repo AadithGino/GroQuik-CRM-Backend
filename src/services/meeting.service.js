@@ -1,6 +1,6 @@
 
 import dayjs from 'dayjs';
-import { ACTIVITY_TYPE, LEAD_STATUS, MEETING_STATUS, MEETING_TYPE, NEXT_ACTION, NOTIFICATION_TYPE, QUOTE_STATUS, TASK_TYPE } from '../constants/crm.constants.js';
+import { ACTIVITY_TYPE, LEAD_STATUS, MEETING_STATUS, MEETING_TYPE, NEXT_ACTION, NOTIFICATION_TYPE, QUOTE_STATUS, TASK_TYPE, normalizeRequirements } from '../constants/crm.constants.js';
 import { Meeting } from '../models/meeting.model.js';
 import { Lead } from '../models/lead.model.js';
 import { addActivity } from './activity.service.js';
@@ -43,7 +43,7 @@ function actionToTaskTitle(nextAction) {
   const map = {
     [NEXT_ACTION.CALL_AGAIN]: 'Call customer again',
     [NEXT_ACTION.CALL_DECISION_MAKER]: 'Call decision maker',
-    [NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION]: 'Check customer decision',
+    [NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION]: 'Follow up for quote confirmation',
     [NEXT_ACTION.FOLLOW_UP_LATER]: 'Follow up after meeting',
     [NEXT_ACTION.SEND_WHATSAPP_DETAILS]: 'Send WhatsApp details',
     [NEXT_ACTION.SEND_QUOTE]: 'Send quote',
@@ -96,7 +96,7 @@ function normalizeMeetingPayload({ nextAction, raw = {}, requirements = [], fall
     mode: raw.mode || 'PHONE_CALL',
     meetingAt: raw.meetingAt || undefined,
     confirmTimeTaskDueAt: raw.confirmTimeTaskDueAt || dueAt,
-    topicRequirements: raw.topicRequirements || requirements || [],
+    topicRequirements: normalizeRequirements(raw.topicRequirements || requirements || []),
     note: raw.note || fallbackNote,
     location: raw.location,
     metadata: { createdFrom: 'MEETING_RESULT_NEXT_ACTION', nextAction },
@@ -110,7 +110,7 @@ function meetingResultDescription(payload) {
 function meetingExceptionTaskTitle({ status, nextAction }) {
   if (status === MEETING_STATUS.CUSTOMER_MISSED) {
     if (nextAction === NEXT_ACTION.SEND_WHATSAPP_DETAILS) return 'Send WhatsApp after customer missed meeting';
-    if (nextAction === NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION) return 'Check customer decision after missed meeting';
+    if (nextAction === NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION) return 'Follow up for quote confirmation after missed meeting';
     if (nextAction === NEXT_ACTION.FOLLOW_UP_LATER) return 'Follow up after customer missed meeting';
     return 'Call customer to reschedule meeting';
   }
@@ -121,7 +121,7 @@ function meetingExceptionTaskTitle({ status, nextAction }) {
   }
   if (status === MEETING_STATUS.CANCELLED) {
     if (nextAction === NEXT_ACTION.CALL_AGAIN) return 'Call after cancelled meeting';
-    if (nextAction === NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION) return 'Check customer decision after cancellation';
+    if (nextAction === NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION) return 'Follow up for quote confirmation after cancellation';
     return 'Follow up after cancelled meeting';
   }
   return actionToTaskTitle(nextAction);
@@ -270,7 +270,7 @@ export async function createMeeting({ leadId, userId, payload }) {
     type: payload.type,
     mode: payload.mode,
     status,
-    topicRequirements: payload.topicRequirements || [],
+    topicRequirements: normalizeRequirements(payload.topicRequirements || []),
     note: payload.note,
     location: payload.location,
     meetingAt: parseAppDateTime(payload.meetingAt),
@@ -390,7 +390,7 @@ export async function markMeetingResult({ meetingId, userId, payload }) {
   const lead = await Lead.findById(meeting.leadId);
   if (!lead) return meeting;
   if (payload.interestScore) lead.interestScore = payload.interestScore;
-  if (payload.requirements) lead.requirements = payload.requirements;
+  if (payload.requirements) lead.requirements = normalizeRequirements(payload.requirements);
 
   if (status === MEETING_STATUS.DONE) {
     lead.status = LEAD_STATUS.CONTACTED;

@@ -8,7 +8,7 @@ const meetingSchema = new mongoose.Schema(
     type: { type: String, enum: Object.values(MEETING_TYPE), required: true },
     mode: { type: String, enum: Object.values(MEETING_MODE), required: true },
     status: { type: String, enum: Object.values(MEETING_STATUS), default: MEETING_STATUS.TIME_PENDING, index: true },
-    topicRequirements: [{ type: String, enum: Object.values(REQUIREMENT) }],
+    topicRequirements: [{ type: String }],
     note: { type: String },
     location: { type: String },
     meetingAt: { type: Date, index: true },
