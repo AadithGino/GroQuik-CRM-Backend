@@ -34,23 +34,51 @@ const doneSchema = z.object({
 export const listTasks = asyncHandler(async (req, res) => {
   const { status = TASK_STATUS.PENDING, from, to, leadId, taskId, type } = req.query;
   const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 100 });
-  const filter = {};
-  if (taskId) filter._id = taskId;
+
+  const base = {};
+  if (taskId) base._id = taskId;
   if (leadId) {
     await assertLeadAccess(req.user, leadId);
-    filter.leadId = leadId;
+    base.leadId = leadId;
   } else {
-    await applyAssignedUserScope(filter, req.user, 'assignedTo');
+    await applyAssignedUserScope(base, req.user, 'assignedTo');
   }
-  if (type && type !== 'ALL') filter.type = type;
+
+  const statusFilter = {};
   if (status !== 'ALL') {
-    if (status === 'OPEN') filter.status = { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] };
-    else filter.status = status;
+    if (status === 'OPEN') statusFilter.status = { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] };
+    else statusFilter.status = status;
   }
-  if (from || to) {
-    filter.dueAt = {};
-    if (from) filter.dueAt.$gte = parseAppRangeStart(from);
-    if (to) filter.dueAt.$lte = parseAppRangeEnd(to);
+
+  const typeFilter = {};
+  if (type && type !== 'ALL') typeFilter.type = type;
+
+  let filter = { ...base, ...statusFilter, ...typeFilter };
+
+  // Keep auto-scheduled call retries (often due next morning after 5:30 PM fails)
+  // visible in today's list so agents can still Update Call Outcome on evening callbacks.
+  if ((from || to) && !taskId) {
+    const dueRange = {};
+    if (from) dueRange.$gte = parseAppRangeStart(from);
+    if (to) dueRange.$lte = parseAppRangeEnd(to);
+    const inRange = { ...base, ...statusFilter, ...typeFilter, dueAt: dueRange };
+    const callTypesOnly = !type || type === 'ALL' || [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL].includes(type);
+    if (callTypesOnly) {
+      const earlyRetries = {
+        ...base,
+        type: { $in: [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL] },
+        status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+        ...(to ? { dueAt: { $gt: parseAppRangeEnd(to) } } : {}),
+        $or: [
+          { 'metadata.allowEarlyOutcome': true },
+          { 'metadata.autoAssignedRetry': true },
+          { title: /Retry follow-up call|Call back customer/i },
+        ],
+      };
+      filter = { $or: [inRange, earlyRetries] };
+    } else {
+      filter = inRange;
+    }
   }
 
   const items = await Task.find(filter)

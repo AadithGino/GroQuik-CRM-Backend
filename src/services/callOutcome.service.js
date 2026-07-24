@@ -11,10 +11,12 @@ import {
   NEXT_ACTION,
   NOT_DONE_REASON,
   QUOTE_STATUS,
+  TASK_STATUS,
   TASK_TYPE,
   normalizeRequirements,
 } from '../constants/crm.constants.js';
 import { Lead } from '../models/lead.model.js';
+import { Task } from '../models/task.model.js';
 import { ApiError } from '../utils/apiError.js';
 import { addActivity } from './activity.service.js';
 import { completeTask, createTask, markTaskNotDone } from './task.service.js';
@@ -37,6 +39,52 @@ function getRetryDueAt(attemptsBeforeThisResult, result) {
   if (attemptsBeforeThisResult === 3) return sameDayEvening(now);
   if (attemptsBeforeThisResult === 4) return daysFromNowAtMorning(1, now);
   return null;
+}
+
+const openCallTaskFilter = {
+  type: { $in: [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL] },
+  status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+};
+
+/** Complete the linked call task (or soonest open one) and clear leftover auto-retries so evening callbacks can be logged. */
+async function completeOpenCallTasksForOutcome({ leadId, taskId, userId, result }) {
+  const isCustomerAttempt = [CALL_RESULT.NOT_ANSWERED, CALL_RESULT.SWITCHED_OFF].includes(result);
+  let completedId = null;
+
+  if (taskId) {
+    await completeTask({ taskId, userId, customerAttempt: isCustomerAttempt, metadata: { callResult: result } });
+    completedId = String(taskId);
+  } else {
+    const open = await Task.findOne({ leadId, ...openCallTaskFilter }).sort({ dueAt: 1 });
+    if (open) {
+      await completeTask({
+        taskId: open._id,
+        userId,
+        customerAttempt: isCustomerAttempt,
+        metadata: { callResult: result, completedWithoutTaskLink: true },
+      });
+      completedId = String(open._id);
+    }
+  }
+
+  const leftovers = await Task.find({
+    leadId,
+    ...openCallTaskFilter,
+    ...(completedId ? { _id: { $ne: completedId } } : {}),
+    $or: [
+      { 'metadata.allowEarlyOutcome': true },
+      { 'metadata.autoAssignedRetry': true },
+      { title: /Retry follow-up call|Call back customer/i },
+    ],
+  });
+  for (const task of leftovers) {
+    await completeTask({
+      taskId: task._id,
+      userId,
+      customerAttempt: false,
+      metadata: { callResult: result, supersededByEarlyOutcome: true },
+    });
+  }
 }
 
 function actionToTaskType(nextAction) {
@@ -188,11 +236,6 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
 
   await addActivity({ leadId, userId, type: ACTIVITY_TYPE.CALL_OUTCOME, title: `Call outcome: ${result}`, description: payload.note, metadata: payload });
 
-  if (taskId && result !== CALL_RESULT.NOT_DONE) {
-    const isCustomerAttempt = [CALL_RESULT.NOT_ANSWERED, CALL_RESULT.SWITCHED_OFF].includes(result);
-    await completeTask({ taskId, userId, customerAttempt: isCustomerAttempt, metadata: { callResult: result } });
-  }
-
   if (result === CALL_RESULT.NOT_DONE) {
     if (taskId) await markTaskNotDone({ taskId, userId, reason: payload.notDoneReason || NOT_DONE_REASON.OTHER, rescheduleAt: parseAppDateTime(payload.rescheduleAt) || nextMorning() });
     lead.status = LEAD_STATUS.FOLLOW_UP_NOT_DONE;
@@ -202,6 +245,8 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
     return lead;
   }
 
+  await completeOpenCallTasksForOutcome({ leadId: lead._id, taskId, userId, result });
+
   if ([CALL_RESULT.NOT_ANSWERED, CALL_RESULT.SWITCHED_OFF].includes(result)) {
     const attemptsBeforeThisResult = lead.failedCustomerAttempts || 0;
     const nextDue = getRetryDueAt(attemptsBeforeThisResult, result);
@@ -210,7 +255,22 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
       lead.status = LEAD_STATUS.NOT_REACHABLE;
     } else {
       lead.status = LEAD_STATUS.FOLLOW_UP_PENDING;
-      await createTask({ leadId: lead._id, assignedTo: lead.assignedTo, type: TASK_TYPE.FOLLOW_UP_CALL, title: 'Retry follow-up call', description: `Auto-created after ${result}. This counts as customer non-response attempt ${lead.failedCustomerAttempts}.`, dueAt: nextDue, priority: 4, metadata: { customerAttemptNumber: lead.failedCustomerAttempts, previousResult: result, dedupeKey: `retry:${lead._id}:${lead.failedCustomerAttempts}` } });
+      await createTask({
+        leadId: lead._id,
+        assignedTo: lead.assignedTo,
+        type: TASK_TYPE.FOLLOW_UP_CALL,
+        title: 'Retry follow-up call',
+        description: `Auto-created after ${result}. This counts as customer non-response attempt ${lead.failedCustomerAttempts}. You can still Update Call Outcome early if the client calls back.`,
+        dueAt: nextDue,
+        priority: 4,
+        metadata: {
+          customerAttemptNumber: lead.failedCustomerAttempts,
+          previousResult: result,
+          autoAssignedRetry: true,
+          allowEarlyOutcome: true,
+          dedupeKey: `retry:${lead._id}:${lead.failedCustomerAttempts}`,
+        },
+      });
     }
     await lead.save();
     await recomputeLeadNextAction(lead._id);
@@ -221,7 +281,20 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
     const dueAt = parseAppDateTime(payload.callbackAt) || sameDayEvening();
     lead.status = LEAD_STATUS.CALLBACK_SCHEDULED;
     await lead.save();
-    await createTask({ leadId: lead._id, assignedTo: lead.assignedTo, type: TASK_TYPE.FOLLOW_UP_CALL, title: 'Call back customer', description: 'Customer was busy / asked to call later. Not counted as failed attempt.', dueAt, priority: 4, metadata: { dedupeKey: `callback:${lead._id}:${Number(new Date(dueAt))}` } });
+    await createTask({
+      leadId: lead._id,
+      assignedTo: lead.assignedTo,
+      type: TASK_TYPE.FOLLOW_UP_CALL,
+      title: 'Call back customer',
+      description: 'Customer was busy / asked to call later. Not counted as failed attempt. You can still Update Call Outcome early if they call back sooner.',
+      dueAt,
+      priority: 4,
+      metadata: {
+        autoAssignedRetry: true,
+        allowEarlyOutcome: true,
+        dedupeKey: `callback:${lead._id}:${Number(new Date(dueAt))}`,
+      },
+    });
     return lead;
   }
 

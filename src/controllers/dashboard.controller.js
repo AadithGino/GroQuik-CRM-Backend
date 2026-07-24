@@ -7,7 +7,7 @@ import { Meeting } from '../models/meeting.model.js';
 import { Mockup } from '../models/mockup.model.js';
 import { Payment } from '../models/payment.model.js';
 import { Quote } from '../models/quote.model.js';
-import { LEAD_STATUS, MEETING_MODE, MEETING_TYPE, MOCKUP_STATUS, QUOTE_STATUS, TASK_STATUS } from '../constants/crm.constants.js';
+import { LEAD_STATUS, MEETING_MODE, MEETING_TYPE, MOCKUP_STATUS, QUOTE_STATUS, TASK_STATUS, TASK_TYPE } from '../constants/crm.constants.js';
 import { accessibleLeadIds, applyAssignedUserScope, leadScopeFilter } from '../utils/permissions.js';
 import { redisConnection } from '../config/redis.js';
 import { env } from '../config/env.js';
@@ -20,7 +20,7 @@ export const dashboard = asyncHandler(async (req, res) => {
   const start = req.query.from ? parseAppRangeStart(req.query.from) : startOfAppDay();
   const end = req.query.to ? parseAppRangeEnd(req.query.to) : endOfAppDay();
   const now = new Date();
-  const cacheKey = `dashboard:v2:${req.user._id}:${req.user.role}:${start.toISOString()}:${end.toISOString()}`;
+  const cacheKey = `dashboard:v3:${req.user._id}:${req.user.role}:${start.toISOString()}:${end.toISOString()}`;
   if (req.query.noCache !== 'true' && env.DASHBOARD_CACHE_TTL_SECONDS > 0) {
     try {
       const cached = await redisConnection.get(cacheKey);
@@ -48,6 +48,18 @@ export const dashboard = asyncHandler(async (req, res) => {
   await applyAssignedUserScope(overdueTaskFilter, req.user, 'assignedTo');
   const notDoneTaskFilter = { status: TASK_STATUS.NOT_DONE };
   await applyAssignedUserScope(notDoneTaskFilter, req.user, 'assignedTo');
+  const earlyCallOutcomeFilter = {
+    status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+    type: { $in: [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL] },
+    dueAt: { $gt: end },
+    createdAt: { $gte: start },
+    $or: [
+      { 'metadata.allowEarlyOutcome': true },
+      { 'metadata.autoAssignedRetry': true },
+      { title: /Retry follow-up call|Call back customer/i },
+    ],
+  };
+  await applyAssignedUserScope(earlyCallOutcomeFilter, req.user, 'assignedTo');
 
   let mockupFilter = { dueAt: { $gte: start, $lte: end }, status: { $nin: [MOCKUP_STATUS.APPROVED, MOCKUP_STATUS.REJECTED] } };
   if (scopedLeadIds) mockupFilter.leadId = { $in: scopedLeadIds };
@@ -80,6 +92,7 @@ export const dashboard = asyncHandler(async (req, res) => {
     highIntentNoActionLeads,
     todayTasksList,
     overdueTasksList,
+    earlyCallOutcomeTasksList,
     todayMeetingsList,
     physicalMeetingsTodayList,
     productMockupMeetingsTodayList,
@@ -104,6 +117,7 @@ export const dashboard = asyncHandler(async (req, res) => {
     Lead.countDocuments(highIntentNoActionFilter),
     Task.find(todayTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
     Task.find(overdueTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
+    Task.find(earlyCallOutcomeFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
     Meeting.find(meetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ mode: 1, meetingAt: 1 }).limit(20),
     Meeting.find(physicalMeetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ meetingAt: 1 }).limit(10),
     Meeting.find(productMockupMeetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ meetingAt: 1 }).limit(10),
@@ -137,6 +151,7 @@ export const dashboard = asyncHandler(async (req, res) => {
     highIntentNoActionLeads,
     todayTasksList,
     overdueTasksList,
+    earlyCallOutcomeTasksList,
     todayMeetingsList,
     physicalMeetingsTodayList,
     productMockupMeetingsTodayList,
