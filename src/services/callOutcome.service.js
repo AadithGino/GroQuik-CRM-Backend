@@ -17,27 +17,55 @@ import {
 } from '../constants/crm.constants.js';
 import { Lead } from '../models/lead.model.js';
 import { Task } from '../models/task.model.js';
+import { Activity } from '../models/activity.model.js';
 import { ApiError } from '../utils/apiError.js';
 import { addActivity } from './activity.service.js';
-import { completeTask, createTask, markTaskNotDone } from './task.service.js';
-import { addBusinessDelay, daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveFollowUpDateTime, sameDayEvening } from '../utils/time.js';
+import { completeTask, createTask, markTaskNotDone, upsertOpenFollowUpCallTask } from './task.service.js';
+import { daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveFollowUpDateTime, resolveRetryDueAt, sameDayEvening } from '../utils/time.js';
 import { createMeeting } from './meeting.service.js';
 import { createMockup } from './mockup.service.js';
 import { createOrReviseQuoteFromAction, updateQuoteStatus } from './quote.service.js';
 import { assertNextActionPrerequisites, latestQuote, requirePaymentBeforeWon } from './businessRules.service.js';
 import { recomputeLeadNextAction } from './leadWorkflow.service.js';
 
-function getRetryDueAt(attemptsBeforeThisResult, result) {
-  const now = new Date();
-  if (result === CALL_RESULT.SWITCHED_OFF) {
-    if (attemptsBeforeThisResult === 0) return addBusinessDelay(now, 3, 'hour');
-    if (attemptsBeforeThisResult === 1) return nextMorning(now);
+const CALL_OUTCOME_PAYLOAD_KEYS = [
+  'result', 'interestScore', 'requirements', 'note', 'nextAction',
+  'nextFollowUpDate', 'nextFollowUpTime', 'customFollowUpAt', 'nextFollowUpAt',
+  'callbackAt', 'notDoneReason', 'rescheduleAt', 'lostReason', 'nurtureAfterDays',
+  'alternateNumber', 'personName', 'relation', 'isDecisionMaker', 'setAsPrimary',
+  'canHandleNow', 'actionDetails', 'taskId',
+];
+
+export function sanitizeCallOutcomePayload(payload = {}) {
+  const cleaned = {};
+  for (const key of CALL_OUTCOME_PAYLOAD_KEYS) {
+    if (payload[key] !== undefined) cleaned[key] = payload[key];
   }
-  if (attemptsBeforeThisResult === 0) return addBusinessDelay(now, 2, 'hour');
-  if (attemptsBeforeThisResult === 1) return sameDayEvening(now);
-  if (attemptsBeforeThisResult === 2) return nextMorning(now);
-  if (attemptsBeforeThisResult === 3) return sameDayEvening(now);
-  if (attemptsBeforeThisResult === 4) return daysFromNowAtMorning(1, now);
+  if (cleaned.requirements) cleaned.requirements = normalizeRequirements(cleaned.requirements);
+  return cleaned;
+}
+
+function getRetryDueAt(attemptsBeforeThisResult, result, payload = {}) {
+  const customFollowUpAt = payload.customFollowUpAt || payload.callbackAt || payload.nextFollowUpAt;
+  if (result === CALL_RESULT.SWITCHED_OFF) {
+    if (attemptsBeforeThisResult === 0) return resolveRetryDueAt({ delayHours: 3, customFollowUpAt });
+    if (attemptsBeforeThisResult === 1) {
+      return customFollowUpAt ? parseAppDateTime(customFollowUpAt) : nextMorning();
+    }
+  }
+  if (attemptsBeforeThisResult === 0) return resolveRetryDueAt({ delayHours: 2, customFollowUpAt });
+  if (attemptsBeforeThisResult === 1) {
+    return customFollowUpAt ? parseAppDateTime(customFollowUpAt) : sameDayEvening();
+  }
+  if (attemptsBeforeThisResult === 2) {
+    return customFollowUpAt ? parseAppDateTime(customFollowUpAt) : nextMorning();
+  }
+  if (attemptsBeforeThisResult === 3) {
+    return customFollowUpAt ? parseAppDateTime(customFollowUpAt) : sameDayEvening();
+  }
+  if (attemptsBeforeThisResult === 4) {
+    return customFollowUpAt ? parseAppDateTime(customFollowUpAt) : daysFromNowAtMorning(1);
+  }
   return null;
 }
 
@@ -46,45 +74,110 @@ const openCallTaskFilter = {
   status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
 };
 
-/** Complete the linked call task (or soonest open one) and clear leftover auto-retries so evening callbacks can be logged. */
-async function completeOpenCallTasksForOutcome({ leadId, taskId, userId, result }) {
+/** Complete the linked call task and clear other open call tasks for this lead (they are superseded by this outcome). */
+async function completeOpenCallTasksForOutcome({ leadId, taskId, userId, result, outcomePayload }) {
   const isCustomerAttempt = [CALL_RESULT.NOT_ANSWERED, CALL_RESULT.SWITCHED_OFF].includes(result);
-  let completedId = null;
+  const completedIds = new Set();
+  const snapshot = sanitizeCallOutcomePayload(outcomePayload || {});
+
+  const markDone = async (id, metadata = {}) => {
+    if (!id || completedIds.has(String(id))) return;
+    await completeTask({
+      taskId: id,
+      userId,
+      customerAttempt: Boolean(metadata.customerAttempt),
+      metadata: { callResult: result, ...metadata },
+    });
+    completedIds.add(String(id));
+  };
 
   if (taskId) {
-    await completeTask({ taskId, userId, customerAttempt: isCustomerAttempt, metadata: { callResult: result } });
-    completedId = String(taskId);
+    await markDone(taskId, {
+      customerAttempt: isCustomerAttempt,
+      callOutcomePayload: { ...snapshot, taskId: String(taskId) },
+    });
   } else {
     const open = await Task.findOne({ leadId, ...openCallTaskFilter }).sort({ dueAt: 1 });
     if (open) {
-      await completeTask({
-        taskId: open._id,
-        userId,
+      await markDone(open._id, {
         customerAttempt: isCustomerAttempt,
-        metadata: { callResult: result, completedWithoutTaskLink: true },
+        completedWithoutTaskLink: true,
+        callOutcomePayload: { ...snapshot, taskId: String(open._id) },
       });
-      completedId = String(open._id);
     }
   }
 
+  // Any other open call tasks are superseded by this logged session.
   const leftovers = await Task.find({
     leadId,
     ...openCallTaskFilter,
-    ...(completedId ? { _id: { $ne: completedId } } : {}),
-    $or: [
-      { 'metadata.allowEarlyOutcome': true },
-      { 'metadata.autoAssignedRetry': true },
-      { title: /Retry follow-up call|Call back customer/i },
-    ],
+    ...(completedIds.size ? { _id: { $nin: [...completedIds] } } : {}),
   });
   for (const task of leftovers) {
-    await completeTask({
-      taskId: task._id,
+    await markDone(task._id, { customerAttempt: false, supersededByCallOutcome: true });
+  }
+}
+
+async function amendCallOutcome({ lead, userId, taskId, payload }) {
+  const task = await Task.findById(taskId);
+  if (!task) throw new ApiError(404, 'Call task not found');
+  if (String(task.leadId) !== String(lead._id)) throw new ApiError(400, 'Task does not belong to this lead');
+  if (![TASK_STATUS.DONE, TASK_STATUS.NOT_DONE].includes(task.status)) {
+    throw new ApiError(400, 'Only completed call outcomes can be amended this way. Use Update Call for open tasks.');
+  }
+
+  const cleaned = sanitizeCallOutcomePayload({ ...payload, taskId: String(taskId) });
+  const result = cleaned.result || task.metadata?.callResult || CALL_RESULT.CONNECTED;
+
+  task.metadata = {
+    ...(task.metadata || {}),
+    callResult: result,
+    callOutcomePayload: cleaned,
+    amendedAt: new Date().toISOString(),
+    amendedBy: userId,
+  };
+  await task.save();
+
+  let activity = await Activity.findOne({
+    leadId: lead._id,
+    type: ACTIVITY_TYPE.CALL_OUTCOME,
+    $or: [
+      { 'metadata.taskId': String(taskId) },
+      { 'metadata.taskId': taskId },
+    ],
+  }).sort({ createdAt: -1 });
+
+  if (!activity && task.completedAt) {
+    const windowStart = new Date(new Date(task.completedAt).getTime() - 5 * 60 * 1000);
+    const windowEnd = new Date(new Date(task.completedAt).getTime() + 5 * 60 * 1000);
+    activity = await Activity.findOne({
+      leadId: lead._id,
+      type: ACTIVITY_TYPE.CALL_OUTCOME,
+      createdAt: { $gte: windowStart, $lte: windowEnd },
+    }).sort({ createdAt: -1 });
+  }
+
+  if (activity) {
+    activity.title = `Call outcome: ${result}`;
+    activity.description = cleaned.note || activity.description;
+    activity.metadata = { ...(activity.metadata || {}), ...cleaned, amended: true };
+    await activity.save();
+  } else {
+    await addActivity({
+      leadId: lead._id,
       userId,
-      customerAttempt: false,
-      metadata: { callResult: result, supersededByEarlyOutcome: true },
+      type: ACTIVITY_TYPE.CALL_OUTCOME,
+      title: `Call outcome amended: ${result}`,
+      description: cleaned.note,
+      metadata: { ...cleaned, amended: true },
     });
   }
+
+  if (cleaned.interestScore != null) lead.interestScore = cleaned.interestScore;
+  if (cleaned.requirements?.length) lead.requirements = normalizeRequirements(cleaned.requirements);
+  await lead.save();
+  await recomputeLeadNextAction(lead._id);
+  return lead;
 }
 
 function actionToTaskType(nextAction) {
@@ -233,11 +326,17 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
   const lead = await Lead.findById(leadId);
   if (!lead) return null;
   const result = payload.result;
+  const linkedTaskId = taskId || payload?.taskId || null;
 
-  await addActivity({ leadId, userId, type: ACTIVITY_TYPE.CALL_OUTCOME, title: `Call outcome: ${result}`, description: payload.note, metadata: payload });
+  if (payload.amendExisting && linkedTaskId) {
+    return amendCallOutcome({ lead, userId, taskId: linkedTaskId, payload });
+  }
+
+  const activityPayload = sanitizeCallOutcomePayload({ ...payload, taskId: linkedTaskId ? String(linkedTaskId) : payload?.taskId });
+  await addActivity({ leadId, userId, type: ACTIVITY_TYPE.CALL_OUTCOME, title: `Call outcome: ${result}`, description: payload.note, metadata: activityPayload });
 
   if (result === CALL_RESULT.NOT_DONE) {
-    if (taskId) await markTaskNotDone({ taskId, userId, reason: payload.notDoneReason || NOT_DONE_REASON.OTHER, rescheduleAt: parseAppDateTime(payload.rescheduleAt) || nextMorning() });
+    if (linkedTaskId) await markTaskNotDone({ taskId: linkedTaskId, userId, reason: payload.notDoneReason || NOT_DONE_REASON.OTHER, rescheduleAt: parseAppDateTime(payload.rescheduleAt) || nextMorning() });
     lead.status = LEAD_STATUS.FOLLOW_UP_NOT_DONE;
     lead.internalMissCount += 1;
     await lead.save();
@@ -245,30 +344,33 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
     return lead;
   }
 
-  await completeOpenCallTasksForOutcome({ leadId: lead._id, taskId, userId, result });
-
   if ([CALL_RESULT.NOT_ANSWERED, CALL_RESULT.SWITCHED_OFF].includes(result)) {
     const attemptsBeforeThisResult = lead.failedCustomerAttempts || 0;
-    const nextDue = getRetryDueAt(attemptsBeforeThisResult, result);
+    const nextDue = getRetryDueAt(attemptsBeforeThisResult, result, payload);
     lead.failedCustomerAttempts = attemptsBeforeThisResult + 1;
+
     if (!nextDue || lead.failedCustomerAttempts >= 6) {
+      await completeOpenCallTasksForOutcome({ leadId: lead._id, taskId: linkedTaskId, userId, result, outcomePayload: activityPayload });
       lead.status = LEAD_STATUS.NOT_REACHABLE;
     } else {
       lead.status = LEAD_STATUS.FOLLOW_UP_PENDING;
-      await createTask({
+      // UPSERT: keep a single open follow-up call and move its dueAt (no duplicate inserts).
+      await upsertOpenFollowUpCallTask({
         leadId: lead._id,
         assignedTo: lead.assignedTo,
-        type: TASK_TYPE.FOLLOW_UP_CALL,
         title: 'Retry follow-up call',
-        description: `Auto-created after ${result}. This counts as customer non-response attempt ${lead.failedCustomerAttempts}. You can still Update Call Outcome early if the client calls back.`,
+        description: `Auto-scheduled after ${result}. Customer non-response attempt ${lead.failedCustomerAttempts}. You can still Update Call if the client calls back.`,
         dueAt: nextDue,
         priority: 4,
+        userId,
         metadata: {
           customerAttemptNumber: lead.failedCustomerAttempts,
           previousResult: result,
           autoAssignedRetry: true,
           allowEarlyOutcome: true,
-          dedupeKey: `retry:${lead._id}:${lead.failedCustomerAttempts}`,
+          callResult: result,
+          callOutcomePayload: activityPayload,
+          customFollowUp: Boolean(payload.customFollowUpAt || payload.callbackAt || payload.nextFollowUpAt),
         },
       });
     }
@@ -277,24 +379,28 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
     return lead;
   }
 
+  await completeOpenCallTasksForOutcome({ leadId: lead._id, taskId: linkedTaskId, userId, result, outcomePayload: activityPayload });
+
   if (result === CALL_RESULT.BUSY_CALL_LATER) {
-    const dueAt = parseAppDateTime(payload.callbackAt) || sameDayEvening();
+    const dueAt = parseAppDateTime(payload.customFollowUpAt || payload.callbackAt) || sameDayEvening();
     lead.status = LEAD_STATUS.CALLBACK_SCHEDULED;
     await lead.save();
-    await createTask({
+    await upsertOpenFollowUpCallTask({
       leadId: lead._id,
       assignedTo: lead.assignedTo,
-      type: TASK_TYPE.FOLLOW_UP_CALL,
       title: 'Call back customer',
-      description: 'Customer was busy / asked to call later. Not counted as failed attempt. You can still Update Call Outcome early if they call back sooner.',
+      description: 'Customer was busy / asked to call later. Not counted as failed attempt. You can still Update Call if they call back sooner.',
       dueAt,
       priority: 4,
+      userId,
       metadata: {
         autoAssignedRetry: true,
         allowEarlyOutcome: true,
-        dedupeKey: `callback:${lead._id}:${Number(new Date(dueAt))}`,
+        manualFollowUp: true,
+        customFollowUp: Boolean(payload.customFollowUpAt || payload.callbackAt),
       },
     });
+    await recomputeLeadNextAction(lead._id);
     return lead;
   }
 
@@ -442,9 +548,12 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
           finalAmount: quote?.finalAmount,
           advanceFollowUp: payload.nextAction === NEXT_ACTION.FOLLOW_UP_FOR_ADVANCE,
           quoteConfirmationFollowUp: [NEXT_ACTION.FOLLOW_UP_LATER, NEXT_ACTION.WAIT_FOR_CUSTOMER_DECISION].includes(payload.nextAction) && Boolean(quote),
+          allowEarlyOutcome: true,
+          manualFollowUp: true,
           dedupeKey: `call-next:${lead._id}:${payload.nextAction}:${Number(new Date(dueAt))}`,
         },
       });
+      await recomputeLeadNextAction(lead._id);
     } else {
       await lead.save();
       await recomputeLeadNextAction(lead._id);

@@ -62,17 +62,76 @@ export function addMinutes(value, minutes) {
 
 export function isWorkingHours(date = new Date()) {
   const d = dayjs(date).tz(APP_TIMEZONE);
-  const hour = d.hour();
-  return hour >= env.WORK_START_HOUR && hour < env.WORK_END_HOUR;
+  const minutes = d.hour() * 60 + d.minute();
+  const start = env.WORK_START_HOUR * 60 + (env.WORK_START_MINUTE || 0);
+  const end = env.WORK_END_HOUR * 60 + (env.WORK_END_MINUTE || 0);
+  return d.day() !== 0 && minutes >= start && minutes < end;
+}
+
+/** Sunday is the only weekly off day. */
+export function isBusinessDay(date = new Date()) {
+  return dayjs(date).tz(APP_TIMEZONE).day() !== 0;
+}
+
+function atShiftTime(base, hour, minute = 0) {
+  return base.hour(hour).minute(minute).second(0).millisecond(0);
+}
+
+/** Next day that is not Sunday, at work start (default 10:00 IST). */
+export function nextBusinessDayStart(date = new Date()) {
+  let d = dayjs(date).tz(APP_TIMEZONE).add(1, 'day');
+  while (d.day() === 0) d = d.add(1, 'day');
+  return atShiftTime(d, env.WORK_START_HOUR, env.WORK_START_MINUTE || 0).toDate();
+}
+
+/**
+ * Auto-retry scheduling with EOD + Sunday skip + optional custom override.
+ * If Current_Time + delayHours > Agent_Shift_End - Buffer → Next_Business_Day_Start.
+ */
+export function resolveRetryDueAt({
+  now = new Date(),
+  delayHours = 2,
+  customFollowUpAt,
+  shiftEndHour = env.WORK_END_HOUR,
+  shiftEndMinute = env.WORK_END_MINUTE || 0,
+  nextDayStartHour = env.WORK_START_HOUR,
+  nextDayStartMinute = env.WORK_START_MINUTE || 0,
+  bufferMinutes = env.RETRY_BUFFER_MINUTES || 0,
+  timezone = APP_TIMEZONE,
+} = {}) {
+  if (customFollowUpAt) {
+    const custom = parseAppDateTime(customFollowUpAt);
+    if (custom) return custom;
+  }
+
+  const base = dayjs(now).tz(timezone);
+  const candidate = base.add(Number(delayHours) || 0, 'hour');
+  const shiftEnd = atShiftTime(base, shiftEndHour, shiftEndMinute).subtract(Number(bufferMinutes) || 0, 'minute');
+
+  if (candidate.isAfter(shiftEnd)) {
+    let next = base.add(1, 'day');
+    while (next.day() === 0) next = next.add(1, 'day');
+    return atShiftTime(next, nextDayStartHour, nextDayStartMinute).toDate();
+  }
+
+  // Candidate is same calendar day but might be Sunday (rare if agents work Sun=off only).
+  if (candidate.day() === 0) {
+    let next = candidate.add(1, 'day');
+    while (next.day() === 0) next = next.add(1, 'day');
+    return atShiftTime(next, nextDayStartHour, nextDayStartMinute).toDate();
+  }
+
+  return candidate.toDate();
 }
 
 export function nextWorkingStart(date = new Date()) {
   let d = dayjs(date).tz(APP_TIMEZONE);
-  const start = d.hour(env.WORK_START_HOUR).minute(0).second(0).millisecond(0);
-  const end = d.hour(env.WORK_END_HOUR).minute(0).second(0).millisecond(0);
+  const start = atShiftTime(d, env.WORK_START_HOUR, env.WORK_START_MINUTE || 0);
+  const end = atShiftTime(d, env.WORK_END_HOUR, env.WORK_END_MINUTE || 0);
 
+  if (d.day() === 0) return nextBusinessDayStart(d.startOf('day').toDate());
   if (d.isBefore(start)) return start.toDate();
-  if (d.isAfter(end) || d.isSame(end)) return start.add(1, 'day').toDate();
+  if (d.isAfter(end) || d.isSame(end)) return nextBusinessDayStart(d.toDate());
   return d.toDate();
 }
 
@@ -130,24 +189,30 @@ export function resolveFollowUpDateTime({ date, timeSlot, customDateTime }) {
 }
 
 export function addBusinessDelay(date, amount, unit) {
-  const d = dayjs(date).tz(APP_TIMEZONE).add(amount, unit);
-  const end = d.hour(env.WORK_END_HOUR).minute(0).second(0).millisecond(0);
-  if (d.isAfter(end)) {
-    return dayjs(d).add(1, 'day').hour(env.WORK_START_HOUR).minute(30).second(0).millisecond(0).toDate();
+  const hours = unit === 'hour' || unit === 'hours' ? Number(amount) : Number(amount);
+  if (unit === 'hour' || unit === 'hours') {
+    return resolveRetryDueAt({ now: date, delayHours: hours });
   }
+  const base = dayjs(date).tz(APP_TIMEZONE);
+  const d = base.add(amount, unit);
+  const end = atShiftTime(base, env.WORK_END_HOUR, env.WORK_END_MINUTE || 0);
+  if (d.isAfter(end)) return nextBusinessDayStart(base.toDate());
   return d.toDate();
 }
 
 export function nextMorning(date = new Date()) {
-  return dayjs(date).tz(APP_TIMEZONE).add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toDate();
+  return nextBusinessDayStart(date);
 }
 
 export function daysFromNowAtMorning(days = 1, date = new Date()) {
-  return dayjs(date).tz(APP_TIMEZONE).add(Number(days), 'day').hour(10).minute(0).second(0).millisecond(0).toDate();
+  let d = dayjs(date).tz(APP_TIMEZONE).add(Number(days), 'day');
+  while (d.day() === 0) d = d.add(1, 'day');
+  return atShiftTime(d, env.WORK_START_HOUR, env.WORK_START_MINUTE || 0).toDate();
 }
 
 export function sameDayEvening(date = new Date()) {
-  const d = dayjs(date).tz(APP_TIMEZONE).hour(17).minute(30).second(0).millisecond(0);
-  if (dayjs(date).tz(APP_TIMEZONE).isAfter(d)) return nextMorning(date);
-  return d.toDate();
+  const base = dayjs(date).tz(APP_TIMEZONE);
+  const evening = atShiftTime(base, env.WORK_END_HOUR, env.WORK_END_MINUTE || 0);
+  if (base.isAfter(evening) || base.day() === 0) return nextBusinessDayStart(date);
+  return evening.toDate();
 }

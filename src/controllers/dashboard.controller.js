@@ -20,7 +20,7 @@ export const dashboard = asyncHandler(async (req, res) => {
   const start = req.query.from ? parseAppRangeStart(req.query.from) : startOfAppDay();
   const end = req.query.to ? parseAppRangeEnd(req.query.to) : endOfAppDay();
   const now = new Date();
-  const cacheKey = `dashboard:v3:${req.user._id}:${req.user.role}:${start.toISOString()}:${end.toISOString()}`;
+  const cacheKey = `dashboard:v5:${req.user._id}:${req.user.role}:${start.toISOString()}:${end.toISOString()}`;
   if (req.query.noCache !== 'true' && env.DASHBOARD_CACHE_TTL_SECONDS > 0) {
     try {
       const cached = await redisConnection.get(cacheKey);
@@ -42,9 +42,17 @@ export const dashboard = asyncHandler(async (req, res) => {
   const productMockupMeetingFilter = { ...meetingFilter, type: MEETING_TYPE.PRODUCT_MOCKUP_MEETING };
   const demoMeetingFilter = { ...meetingFilter, type: { $ne: MEETING_TYPE.PRODUCT_MOCKUP_MEETING } };
 
-  const todayTaskFilter = { status: TASK_STATUS.PENDING, dueAt: { $gte: start, $lte: end } };
+  const todayTaskFilter = {
+    status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+    dueAt: { $gte: start, $lte: end },
+  };
   await applyAssignedUserScope(todayTaskFilter, req.user, 'assignedTo');
-  const overdueTaskFilter = { status: TASK_STATUS.OVERDUE };
+  const overdueTaskFilter = {
+    $or: [
+      { status: TASK_STATUS.OVERDUE },
+      { status: TASK_STATUS.PENDING, dueAt: { $lt: now } },
+    ],
+  };
   await applyAssignedUserScope(overdueTaskFilter, req.user, 'assignedTo');
   const notDoneTaskFilter = { status: TASK_STATUS.NOT_DONE };
   await applyAssignedUserScope(notDoneTaskFilter, req.user, 'assignedTo');
@@ -52,11 +60,11 @@ export const dashboard = asyncHandler(async (req, res) => {
     status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
     type: { $in: [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL] },
     dueAt: { $gt: end },
-    createdAt: { $gte: start },
     $or: [
       { 'metadata.allowEarlyOutcome': true },
       { 'metadata.autoAssignedRetry': true },
-      { title: /Retry follow-up call|Call back customer/i },
+      { 'metadata.manualFollowUp': true },
+      { title: /Retry follow-up call|Call back customer|Follow up later/i },
     ],
   };
   await applyAssignedUserScope(earlyCallOutcomeFilter, req.user, 'assignedTo');
@@ -93,6 +101,7 @@ export const dashboard = asyncHandler(async (req, res) => {
     todayTasksList,
     overdueTasksList,
     earlyCallOutcomeTasksList,
+    notDoneTasksList,
     todayMeetingsList,
     physicalMeetingsTodayList,
     productMockupMeetingsTodayList,
@@ -115,9 +124,10 @@ export const dashboard = asyncHandler(async (req, res) => {
     Lead.countDocuments(advanceLeadFilter),
     Lead.countDocuments(noActionLeadFilter),
     Lead.countDocuments(highIntentNoActionFilter),
-    Task.find(todayTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
-    Task.find(overdueTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
-    Task.find(earlyCallOutcomeFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(12),
+    Task.find(todayTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(50),
+    Task.find(overdueTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(50),
+    Task.find(earlyCallOutcomeFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1 }).limit(50),
+    Task.find(notDoneTaskFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone status interestScore failedCustomerAttempts').populate('assignedTo', 'name').sort({ dueAt: 1, updatedAt: -1 }).limit(50),
     Meeting.find(meetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ mode: 1, meetingAt: 1 }).limit(20),
     Meeting.find(physicalMeetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ meetingAt: 1 }).limit(10),
     Meeting.find(productMockupMeetingFilter).populate('leadId', 'name businessName phone callPhone whatsappPhone interestScore').populate('assignedTo', 'name').sort({ meetingAt: 1 }).limit(10),
@@ -152,6 +162,7 @@ export const dashboard = asyncHandler(async (req, res) => {
     todayTasksList,
     overdueTasksList,
     earlyCallOutcomeTasksList,
+    notDoneTasksList,
     todayMeetingsList,
     physicalMeetingsTodayList,
     productMockupMeetingsTodayList,

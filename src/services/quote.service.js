@@ -17,7 +17,38 @@ async function completeQuoteSendTask({ leadId, quoteId, userId, revised = false 
   if (task) await completeTask({ taskId: task._id, userId, customerAttempt: false, metadata: { quoteSent: true, quoteId } });
 }
 
-async function createQuoteFollowUp({ quote, lead, revised = false }) {
+/** Clear open quote-confirmation follow-ups so a revision leaves only the new follow-up task. */
+async function completeOpenQuoteFollowUpTasks({ leadId, userId, reason = 'supersededByQuoteRevision' }) {
+  if (!leadId) return [];
+  const tasks = await Task.find({
+    leadId,
+    type: TASK_TYPE.FOLLOW_UP_CALL,
+    status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+    $or: [
+      { 'metadata.quoteFollowUp': true },
+      { 'metadata.quoteConfirmationFollowUp': true },
+      { title: /Follow up for (revised )?quote confirmation/i },
+    ],
+  });
+  for (const task of tasks) {
+    await completeTask({
+      taskId: task._id,
+      userId,
+      customerAttempt: false,
+      metadata: { [reason]: true },
+    });
+  }
+  return tasks;
+}
+
+async function createQuoteFollowUp({ quote, lead, revised = false, userId }) {
+  // Always replace prior quote confirmation follow-ups — especially after a revision.
+  await completeOpenQuoteFollowUpTasks({
+    leadId: quote.leadId,
+    userId: userId || lead.assignedTo,
+    reason: revised ? 'supersededByRevisedQuoteFollowUp' : 'supersededByQuoteFollowUp',
+  });
+
   const amountLabel = `₹${Number(quote.finalAmount || 0).toLocaleString('en-IN')}`;
   return createTask({
     leadId: quote.leadId,
@@ -35,7 +66,9 @@ async function createQuoteFollowUp({ quote, lead, revised = false }) {
       finalAmount: quote.finalAmount,
       quoteFollowUp: true,
       quoteConfirmationFollowUp: true,
-      dedupeKey: `quote-follow-up:${quote._id}`,
+      revisedQuoteFollowUp: Boolean(revised),
+      // One open quote confirmation follow-up per lead.
+      dedupeKey: `quote-follow-up:${quote.leadId}`,
     },
   });
 }
@@ -97,6 +130,8 @@ export async function reviseQuote({ quoteId, userId, payload }) {
     throw new ApiError(400, 'A revised quote draft is already pending. Send that revision before creating another one.');
   }
   await Quote.findByIdAndUpdate(previous._id, { status: QUOTE_STATUS.REVISION_REQUIRED });
+  // Old quote confirmation follow-ups are obsolete once a revision is started.
+  await completeOpenQuoteFollowUpTasks({ leadId: previous.leadId, userId, reason: 'supersededByQuoteRevision' });
   return createQuote({
     leadId: previous.leadId,
     userId,
@@ -143,7 +178,7 @@ export async function updateQuoteStatus({ quoteId, userId, status, note, fileUrl
   if ([QUOTE_STATUS.SENT, QUOTE_STATUS.REVISED_SENT].includes(status)) {
     await completeQuoteSendTask({ leadId: quote.leadId, quoteId: quote._id, userId, revised });
     if (isNewTransition) {
-      await createQuoteFollowUp({ quote, lead, revised });
+      await createQuoteFollowUp({ quote, lead, revised, userId });
       await notifyAssigneeAndAdmins({ assignedTo: lead.assignedTo, leadId: quote.leadId, type: NOTIFICATION_TYPE.QUOTE_PENDING, title: revised ? 'Revised quote sent' : 'Quote sent', message: 'Quote follow-up created for tomorrow morning.', priority: 4, metadata: { quoteId: quote._id } });
     }
   }

@@ -18,6 +18,15 @@ const createSchema = z.object({
 
 const updateSchema = createSchema.partial().omit({ password: true }).extend({ password: z.string().min(6).optional(), isActive: z.boolean().optional(), acceptingLeads: z.boolean().optional(), assignmentWeight: z.number().optional() });
 
+export const listDevelopers = asyncHandler(async (req, res) => {
+  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 100 });
+  const items = await User.find({
+    role: { $in: [ROLES.DEVELOPER, ROLES.ADMIN] },
+    isActive: true,
+  }).select('name email role').sort({ name: 1 }).limit(limit);
+  res.json({ items });
+});
+
 export const listUsers = asyncHandler(async (req, res) => {
   const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 100 });
   const filter = {};

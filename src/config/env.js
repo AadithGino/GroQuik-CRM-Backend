@@ -17,7 +17,12 @@ export const env = {
   REDIS_PORT: Number(process.env.REDIS_PORT || 6379),
   REDIS_PASSWORD: process.env.REDIS_PASSWORD || undefined,
   WORK_START_HOUR: Number(process.env.WORK_START_HOUR || 10),
-  WORK_END_HOUR: Number(process.env.WORK_END_HOUR || 19),
+  WORK_START_MINUTE: Number(process.env.WORK_START_MINUTE || 0),
+  /** Agent shift end — retries after this roll to next business day start. Default 17:30. */
+  WORK_END_HOUR: Number(process.env.WORK_END_HOUR || 17),
+  WORK_END_MINUTE: Number(process.env.WORK_END_MINUTE || 30),
+  /** Minutes before shift end treated as past EOD for auto-retry scheduling. */
+  RETRY_BUFFER_MINUTES: Number(process.env.RETRY_BUFFER_MINUTES || 0),
   TASK_OVERDUE_GRACE_MINUTES: Number(process.env.TASK_OVERDUE_GRACE_MINUTES || 15),
   DEFAULT_TIMEZONE: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN || 'groquik_meta_verify',

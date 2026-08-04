@@ -72,7 +72,8 @@ export const listTasks = asyncHandler(async (req, res) => {
         $or: [
           { 'metadata.allowEarlyOutcome': true },
           { 'metadata.autoAssignedRetry': true },
-          { title: /Retry follow-up call|Call back customer/i },
+          { 'metadata.manualFollowUp': true },
+          { title: /Retry follow-up call|Call back customer|Follow up later/i },
         ],
       };
       filter = { $or: [inRange, earlyRetries] };

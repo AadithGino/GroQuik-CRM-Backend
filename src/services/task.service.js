@@ -1,10 +1,14 @@
 
-import { TASK_STATUS, ACTIVITY_TYPE, NOTIFICATION_TYPE } from '../constants/crm.constants.js';
+import { TASK_STATUS, TASK_TYPE, ACTIVITY_TYPE, NOTIFICATION_TYPE } from '../constants/crm.constants.js';
 import { Task } from '../models/task.model.js';
 import { addActivity } from './activity.service.js';
 import { scheduleTaskDueCheck } from './scheduler.service.js';
 import { notifyAssigneeAndAdmins } from './notification.service.js';
 import { scheduleLeadNextActionRecompute } from './leadWorkflow.service.js';
+
+export function leadFollowUpCallDedupeKey(leadId) {
+  return `lead-follow-up-call:${leadId}`;
+}
 
 function buildTaskDedupeFilter({ leadId, meetingId, type, metadata = {} }) {
   if (!metadata?.dedupeKey) return null;
@@ -32,6 +36,85 @@ export async function createTask({ leadId, meetingId, assignedTo, type, title, d
   }
   if (!metadata?.slaType) await scheduleTaskDueCheck(task);
   return task;
+}
+
+/**
+ * Ensure a lead has exactly one open FIRST_CALL / FOLLOW_UP_CALL for auto-retry.
+ * Updates dueAt/metadata on the existing open call task when present; otherwise creates one.
+ */
+export async function upsertOpenFollowUpCallTask({
+  leadId,
+  assignedTo,
+  title,
+  description,
+  dueAt,
+  priority = 4,
+  metadata = {},
+  userId,
+}) {
+  if (!leadId) throw new Error('leadId is required for follow-up upsert');
+  const stableKey = leadFollowUpCallDedupeKey(leadId);
+  const mergedMeta = {
+    ...(metadata || {}),
+    dedupeKey: stableKey,
+    autoAssignedRetry: true,
+    allowEarlyOutcome: true,
+    manualFollowUp: Boolean(metadata?.manualFollowUp),
+  };
+
+  const openTasks = await Task.find({
+    leadId,
+    type: { $in: [TASK_TYPE.FIRST_CALL, TASK_TYPE.FOLLOW_UP_CALL] },
+    status: { $in: [TASK_STATUS.PENDING, TASK_STATUS.OVERDUE] },
+  }).sort({ dueAt: 1 });
+
+  let task = openTasks.find((t) => t.metadata?.dedupeKey === stableKey)
+    || openTasks.find((t) => t.metadata?.autoAssignedRetry)
+    || openTasks[0];
+
+  if (task) {
+    const previousDueAt = task.dueAt;
+    task.type = TASK_TYPE.FOLLOW_UP_CALL;
+    task.title = title;
+    task.description = description;
+    task.dueAt = dueAt;
+    task.priority = priority;
+    task.status = TASK_STATUS.PENDING;
+    if (assignedTo) task.assignedTo = assignedTo;
+    task.metadata = { ...(task.metadata || {}), ...mergedMeta, rescheduledFrom: previousDueAt };
+    await task.save();
+    await scheduleTaskDueCheck(task);
+    await addActivity({
+      leadId,
+      userId: userId || assignedTo,
+      type: ACTIVITY_TYPE.TASK_CREATED,
+      title: `Follow-up rescheduled: ${title}`,
+      metadata: { taskId: task._id, dueAt, dedupeKey: stableKey, upserted: true },
+    });
+
+    for (const other of openTasks) {
+      if (String(other._id) === String(task._id)) continue;
+      await completeTask({
+        taskId: other._id,
+        userId: userId || assignedTo,
+        customerAttempt: false,
+        metadata: { supersededByRetryUpsert: true },
+      });
+    }
+    scheduleLeadNextActionRecompute(leadId);
+    return task;
+  }
+
+  return createTask({
+    leadId,
+    assignedTo,
+    type: TASK_TYPE.FOLLOW_UP_CALL,
+    title,
+    description,
+    dueAt,
+    priority,
+    metadata: mergedMeta,
+  });
 }
 
 export async function completeOpenTasksByMetadata({ leadId, type, metadataKey, metadataValue, userId, metadata = {} }) {
