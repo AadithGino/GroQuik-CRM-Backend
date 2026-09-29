@@ -23,6 +23,7 @@ import quoteRoutes from './routes/quote.routes.js';
 import mockupRoutes from './routes/mockup.routes.js';
 import paymentRoutes from './routes/payment.routes.js';
 import projectRoutes from './routes/project.routes.js';
+import clientRoutes from './routes/client.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import importRoutes from './routes/import.routes.js';
 import whatsappRoutes from './routes/whatsapp.routes.js';
@@ -82,6 +83,7 @@ export function createApp() {
   app.use('/api/mockups', mockupRoutes);
   app.use('/api/payments', paymentRoutes);
   app.use('/api/projects', projectRoutes);
+  app.use('/api/clients', clientRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/imports', importRoutes);
   app.use('/api/whatsapp', whatsappRoutes);

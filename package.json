@@ -8,9 +8,12 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed:admin": "node src/utils/seedAdmin.js",
+    "export:leads": "node scripts/exportLeadsBeforeDate.js",
     "test": "node --test src/**/*.test.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1104.0",
+    "@aws-sdk/s3-request-presigner": "^3.1104.0",
     "bcryptjs": "latest",
     "bullmq": "latest",
     "compression": "latest",
@@ -25,10 +28,10 @@
     "jsonwebtoken": "latest",
     "mongoose": "latest",
     "morgan": "latest",
-    "socket.io": "latest",
-    "zod": "latest",
     "multer": "latest",
-    "xlsx": "latest"
+    "socket.io": "latest",
+    "xlsx": "latest",
+    "zod": "latest"
   },
   "devDependencies": {
     "nodemon": "latest"

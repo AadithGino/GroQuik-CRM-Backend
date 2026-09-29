@@ -4,6 +4,7 @@ import multer from 'multer';
 import { env } from '../config/env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/apiError.js';
+import { createPresignedDownload, createPresignedUpload } from '../services/s3.service.js';
 
 const uploadRoot = path.resolve(env.UPLOAD_DIR);
 fs.mkdirSync(uploadRoot, { recursive: true });
@@ -42,4 +43,18 @@ export const uploadFile = asyncHandler(async (req, res) => {
     mimeType: req.file.mimetype,
     size: req.file.size,
   });
+});
+
+/** AWS S3 PUT presigned URL for browser direct upload. */
+export const createPresign = asyncHandler(async (req, res) => {
+  const { kind, fileName, contentType } = req.body || {};
+  const result = await createPresignedUpload({ kind, fileName, contentType });
+  res.json(result);
+});
+
+/** AWS S3 GET presigned URL for viewing private objects. */
+export const createSignedGet = asyncHandler(async (req, res) => {
+  const { key, fileName, download = true } = req.body || {};
+  const result = await createPresignedDownload(key, { fileName, download: download !== false });
+  res.json(result);
 });

@@ -139,7 +139,7 @@ export const createLead = asyncHandler(async (req, res) => {
 
 export const listLeads = asyncHandler(async (req, res) => {
   const { q, status, assignedTo, source } = req.query;
-  const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 100 });
+  const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 100 });
   const filter = await leadScopeFilter(req.user);
 
   if (isSet(status)) filter.status = status;

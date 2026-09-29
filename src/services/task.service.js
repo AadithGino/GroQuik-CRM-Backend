@@ -5,6 +5,7 @@ import { addActivity } from './activity.service.js';
 import { scheduleTaskDueCheck } from './scheduler.service.js';
 import { notifyAssigneeAndAdmins } from './notification.service.js';
 import { scheduleLeadNextActionRecompute } from './leadWorkflow.service.js';
+import { capAutoScheduledDueAt } from '../utils/time.js';
 
 export function leadFollowUpCallDedupeKey(leadId) {
   return `lead-follow-up-call:${leadId}`;
@@ -61,6 +62,9 @@ export async function upsertOpenFollowUpCallTask({
     allowEarlyOutcome: true,
     manualFollowUp: Boolean(metadata?.manualFollowUp),
   };
+  const finalDueAt = mergedMeta.customFollowUp
+    ? dueAt
+    : capAutoScheduledDueAt(dueAt);
 
   const openTasks = await Task.find({
     leadId,
@@ -77,7 +81,7 @@ export async function upsertOpenFollowUpCallTask({
     task.type = TASK_TYPE.FOLLOW_UP_CALL;
     task.title = title;
     task.description = description;
-    task.dueAt = dueAt;
+    task.dueAt = finalDueAt;
     task.priority = priority;
     task.status = TASK_STATUS.PENDING;
     if (assignedTo) task.assignedTo = assignedTo;
@@ -89,7 +93,7 @@ export async function upsertOpenFollowUpCallTask({
       userId: userId || assignedTo,
       type: ACTIVITY_TYPE.TASK_CREATED,
       title: `Follow-up rescheduled: ${title}`,
-      metadata: { taskId: task._id, dueAt, dedupeKey: stableKey, upserted: true },
+      metadata: { taskId: task._id, dueAt: finalDueAt, dedupeKey: stableKey, upserted: true },
     });
 
     for (const other of openTasks) {
@@ -111,7 +115,7 @@ export async function upsertOpenFollowUpCallTask({
     type: TASK_TYPE.FOLLOW_UP_CALL,
     title,
     description,
-    dueAt,
+    dueAt: finalDueAt,
     priority,
     metadata: mergedMeta,
   });

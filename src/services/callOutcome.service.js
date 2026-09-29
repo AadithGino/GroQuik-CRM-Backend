@@ -21,7 +21,7 @@ import { Activity } from '../models/activity.model.js';
 import { ApiError } from '../utils/apiError.js';
 import { addActivity } from './activity.service.js';
 import { completeTask, createTask, markTaskNotDone, upsertOpenFollowUpCallTask } from './task.service.js';
-import { daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveFollowUpDateTime, resolveRetryDueAt, sameDayEvening } from '../utils/time.js';
+import { daysFromNowAtMorning, nextMorning, parseAppDateTime, resolveAutoCallLaterDueAt, resolveFollowUpDateTime, resolveRetryDueAt, sameDayEvening } from '../utils/time.js';
 import { createMeeting } from './meeting.service.js';
 import { createMockup } from './mockup.service.js';
 import { createOrReviseQuoteFromAction, updateQuoteStatus } from './quote.service.js';
@@ -46,7 +46,8 @@ export function sanitizeCallOutcomePayload(payload = {}) {
 }
 
 function getRetryDueAt(attemptsBeforeThisResult, result, payload = {}) {
-  const customFollowUpAt = payload.customFollowUpAt || payload.callbackAt || payload.nextFollowUpAt;
+  // callbackAt is for busy/partner flows only — do not treat it as a retry override.
+  const customFollowUpAt = payload.customFollowUpAt || payload.nextFollowUpAt;
   if (result === CALL_RESULT.SWITCHED_OFF) {
     if (attemptsBeforeThisResult === 0) return resolveRetryDueAt({ delayHours: 3, customFollowUpAt });
     if (attemptsBeforeThisResult === 1) {
@@ -359,7 +360,7 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
         leadId: lead._id,
         assignedTo: lead.assignedTo,
         title: 'Retry follow-up call',
-        description: `Auto-scheduled after ${result}. Customer non-response attempt ${lead.failedCustomerAttempts}. You can still Update Call if the client calls back.`,
+        description: payload.note || `Retry after ${result} (attempt ${lead.failedCustomerAttempts}).`,
         dueAt: nextDue,
         priority: 4,
         userId,
@@ -382,14 +383,17 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
   await completeOpenCallTasksForOutcome({ leadId: lead._id, taskId: linkedTaskId, userId, result, outcomePayload: activityPayload });
 
   if (result === CALL_RESULT.BUSY_CALL_LATER) {
-    const dueAt = parseAppDateTime(payload.customFollowUpAt || payload.callbackAt) || sameDayEvening();
+    const dueAt = resolveAutoCallLaterDueAt({
+      customFollowUpAt: payload.customFollowUpAt,
+      callbackAt: payload.callbackAt,
+    });
     lead.status = LEAD_STATUS.CALLBACK_SCHEDULED;
     await lead.save();
     await upsertOpenFollowUpCallTask({
       leadId: lead._id,
       assignedTo: lead.assignedTo,
       title: 'Call back customer',
-      description: 'Customer was busy / asked to call later. Not counted as failed attempt. You can still Update Call if they call back sooner.',
+      description: payload.note || 'Customer was busy / asked to call later.',
       dueAt,
       priority: 4,
       userId,
@@ -397,6 +401,7 @@ export async function applyCallOutcome({ leadId, userId, taskId, payload }) {
         autoAssignedRetry: true,
         allowEarlyOutcome: true,
         manualFollowUp: true,
+        callOutcomePayload: activityPayload,
         customFollowUp: Boolean(payload.customFollowUpAt || payload.callbackAt),
       },
     });

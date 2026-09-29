@@ -85,15 +85,16 @@ export function nextBusinessDayStart(date = new Date()) {
 }
 
 /**
- * Auto-retry scheduling with EOD + Sunday skip + optional custom override.
- * If Current_Time + delayHours > Agent_Shift_End - Buffer → Next_Business_Day_Start.
+ * Auto-retry / call-later scheduling with EOD cap + Sunday skip + optional custom override.
+ * If Current_Time + delayHours > AUTO_CALL_LATER_END (default 18:30) − Buffer → Next_Business_Day_Start.
+ * Custom follow-up times are never capped.
  */
 export function resolveRetryDueAt({
   now = new Date(),
   delayHours = 2,
   customFollowUpAt,
-  shiftEndHour = env.WORK_END_HOUR,
-  shiftEndMinute = env.WORK_END_MINUTE || 0,
+  shiftEndHour = env.AUTO_CALL_LATER_END_HOUR,
+  shiftEndMinute = env.AUTO_CALL_LATER_END_MINUTE || 0,
   nextDayStartHour = env.WORK_START_HOUR,
   nextDayStartMinute = env.WORK_START_MINUTE || 0,
   bufferMinutes = env.RETRY_BUFFER_MINUTES || 0,
@@ -121,7 +122,22 @@ export function resolveRetryDueAt({
     return atShiftTime(next, nextDayStartHour, nextDayStartMinute).toDate();
   }
 
-  return candidate.toDate();
+  return capAutoScheduledDueAt(candidate.toDate());
+}
+
+/**
+ * System auto-schedules must never land after 18:30 IST on the same calendar day.
+ * Times after that roll to the next business morning (Sunday skipped).
+ * Does not apply to explicit user/admin custom follow-up times.
+ */
+export function capAutoScheduledDueAt(dueAt) {
+  if (!dueAt) return dueAt;
+  const d = dayjs(dueAt).tz(APP_TIMEZONE);
+  if (d.day() === 0) return nextBusinessDayStart(d.toDate());
+
+  const end = atShiftTime(d, env.AUTO_CALL_LATER_END_HOUR, env.AUTO_CALL_LATER_END_MINUTE || 0);
+  if (d.isAfter(end)) return end.toDate();
+  return d.toDate();
 }
 
 export function nextWorkingStart(date = new Date()) {
@@ -137,30 +153,28 @@ export function nextWorkingStart(date = new Date()) {
 
 export function getNewLeadDueTimes(createdAt = new Date()) {
   const d = dayjs(createdAt).tz(APP_TIMEZONE);
-  const start = d.hour(env.WORK_START_HOUR).minute(0).second(0).millisecond(0);
-  const end = d.hour(env.WORK_END_HOUR).minute(0).second(0).millisecond(0);
+  const start = atShiftTime(d, env.WORK_START_HOUR, env.WORK_START_MINUTE || 0);
+  const autoEnd = atShiftTime(d, env.AUTO_CALL_LATER_END_HOUR, env.AUTO_CALL_LATER_END_MINUTE || 0);
 
   if (d.isBefore(start)) {
     return {
       whatsappDueAt: start.toDate(),
-      callDueAt: start.add(30, 'minute').toDate(),
+      callDueAt: capAutoScheduledDueAt(start.add(30, 'minute').toDate()),
     };
   }
 
-  if (d.isSame(end) || d.isAfter(end)) {
-    const nextStart = start.add(1, 'day');
+  if (d.isAfter(autoEnd) || d.isSame(autoEnd)) {
+    const nextStart = nextBusinessDayStart(d.toDate());
+    const next = dayjs(nextStart).tz(APP_TIMEZONE);
     return {
-      whatsappDueAt: nextStart.toDate(),
-      callDueAt: nextStart.add(30, 'minute').toDate(),
+      whatsappDueAt: next.toDate(),
+      callDueAt: capAutoScheduledDueAt(next.add(30, 'minute').toDate()),
     };
   }
-
-  const whatsapp = d.add(15, 'minute');
-  const call = d.add(60, 'minute');
 
   return {
-    whatsappDueAt: whatsapp.isAfter(end) ? end.toDate() : whatsapp.toDate(),
-    callDueAt: call.isAfter(end) ? start.add(1, 'day').add(30, 'minute').toDate() : call.toDate(),
+    whatsappDueAt: capAutoScheduledDueAt(d.add(15, 'minute').toDate()),
+    callDueAt: capAutoScheduledDueAt(d.add(60, 'minute').toDate()),
   };
 }
 
@@ -175,7 +189,7 @@ export function resolveFollowUpDateTime({ date, timeSlot, customDateTime }) {
       d = d.hour(14).minute(30).second(0).millisecond(0);
       break;
     case FOLLOW_UP_TIME.EVENING:
-      d = d.hour(17).minute(30).second(0).millisecond(0);
+      d = d.hour(env.AUTO_CALL_LATER_END_HOUR).minute(env.AUTO_CALL_LATER_END_MINUTE || 0).second(0).millisecond(0);
       break;
     case FOLLOW_UP_TIME.CUSTOM:
       return customDateTime ? parseAppDateTime(customDateTime) : d.hour(10).minute(0).toDate();
@@ -195,9 +209,9 @@ export function addBusinessDelay(date, amount, unit) {
   }
   const base = dayjs(date).tz(APP_TIMEZONE);
   const d = base.add(amount, unit);
-  const end = atShiftTime(base, env.WORK_END_HOUR, env.WORK_END_MINUTE || 0);
+  const end = atShiftTime(base, env.AUTO_CALL_LATER_END_HOUR, env.AUTO_CALL_LATER_END_MINUTE || 0);
   if (d.isAfter(end)) return nextBusinessDayStart(base.toDate());
-  return d.toDate();
+  return capAutoScheduledDueAt(d.toDate());
 }
 
 export function nextMorning(date = new Date()) {
@@ -210,9 +224,26 @@ export function daysFromNowAtMorning(days = 1, date = new Date()) {
   return atShiftTime(d, env.WORK_START_HOUR, env.WORK_START_MINUTE || 0).toDate();
 }
 
+/** Default auto call-later slot: today at AUTO_CALL_LATER_END (18:30), else next business morning. */
 export function sameDayEvening(date = new Date()) {
   const base = dayjs(date).tz(APP_TIMEZONE);
-  const evening = atShiftTime(base, env.WORK_END_HOUR, env.WORK_END_MINUTE || 0);
+  const evening = atShiftTime(base, env.AUTO_CALL_LATER_END_HOUR, env.AUTO_CALL_LATER_END_MINUTE || 0);
   if (base.isAfter(evening) || base.day() === 0) return nextBusinessDayStart(date);
-  return evening.toDate();
+  return capAutoScheduledDueAt(evening.toDate());
+}
+
+/**
+ * Resolve dueAt for auto call-later. Explicit customFollowUpAt / callbackAt from user/admin are kept as-is.
+ * Otherwise uses sameDayEvening (≤ 18:30).
+ */
+export function resolveAutoCallLaterDueAt({ customFollowUpAt, callbackAt, now = new Date() } = {}) {
+  if (customFollowUpAt) {
+    const custom = parseAppDateTime(customFollowUpAt);
+    if (custom) return custom;
+  }
+  if (callbackAt) {
+    const picked = parseAppDateTime(callbackAt);
+    if (picked) return picked;
+  }
+  return sameDayEvening(now);
 }

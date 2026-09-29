@@ -46,6 +46,7 @@ const leadSchema = new mongoose.Schema(
     quoteStatus: { type: String },
     paymentStatus: { type: String },
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project' },
+    clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
     importedBatchId: { type: mongoose.Schema.Types.ObjectId, ref: 'ImportBatch' },
   },
   { timestamps: true }
